@@ -18,7 +18,7 @@ Plaud のロゴ・コピーライト・「公式サイト」は載せない。�
 
 ## 結論
 
-会議（録音）1件につき `https://plaud.kitepon.dev/m/<id>` を1枚用意し、同じタブ構成にする。データはパイプラインが書いた JSON と MP3。GrokBot が要約構造を埋める。公開ホストは Cloudflare Pages + R2。会議内容が仕事の安全教育なので、既定は **Cloudflare Access（自分のメールだけ）**。素通しの全世界公開にはしない。
+会議（録音）1件につき `https://plaud.kitepon.dev/m/<id>` を1枚用意し、同じタブ構成にする。データはパイプラインが書いた JSON と MP3。GrokBot が要約構造を埋める。公開ホストは MS-A2 + Cloudflare Tunnel `home-server` + Access（自分のメールだけ）。R2 / Pages は使わない。メールは本線ではない。
 
 ---
 

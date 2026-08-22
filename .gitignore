@@ -2,3 +2,8 @@
 __pycache__/
 *.pyc
 .venv/
+web/node_modules/
+web/dist/
+docker-compose.override.yml
+data/meetings/probe-*
+.lattice/runs/

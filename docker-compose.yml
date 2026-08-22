@@ -1,0 +1,18 @@
+services:
+  web:
+    build: .
+    image: plaude-web:latest
+    container_name: plaude-web
+    restart: unless-stopped
+    environment:
+      PLAUDE_PUBLISH_TOKEN: ${PLAUDE_PUBLISH_TOKEN:-}
+    volumes:
+      - ./data:/data
+    ports:
+      - "127.0.0.1:18880:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

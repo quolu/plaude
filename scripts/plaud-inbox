@@ -665,6 +665,59 @@ def send_mail(cfg: dict, to: str, subject: str, body_path: Path, attach: Path | 
     raise SystemExit(1)
 
 
+def transcript_segments(text: str) -> list[dict]:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return [{"t": 0, "speaker": "Speaker 1", "text": "\n".join(lines)}] if lines else []
+
+
+def cmd_publish(cfg: dict, fid: str) -> int:
+    origin = (cfg.get("site_origin") or os.environ.get("PLAUDE_ORIGIN") or "").rstrip("/")
+    if not origin:
+        eprint("site_origin が未設定")
+        return 1
+    token = os.environ.get("PLAUDE_PUBLISH_TOKEN") or (cfg.get("publish_token") or "")
+    state = load_state(cfg)
+    rec = file_rec(state, fid)
+    dd = data_dir(cfg)
+    tr_path = Path(rec.get("transcript") or dd / "transcripts" / f"{fid}.txt")
+    if not tr_path.exists():
+        eprint(f"{fid}: 先に transcribe")
+        return 1
+    notes_p = dd / "notes" / f"{fid}.md"
+    summary = notes_p.read_text(encoding="utf-8") if notes_p.exists() else ""
+    payload = {
+        "id": fid,
+        "title": rec.get("name") or fid,
+        "started_at": rec.get("start_at") or "",
+        "duration": fmt_duration(rec.get("duration_ms")),
+        "duration_ms": rec.get("duration_ms"),
+        "template_id": rec.get("template"),
+        "transcript": transcript_segments(tr_path.read_text(encoding="utf-8")),
+        "summary": summary,
+    }
+    body = json.dumps(payload, ensure_ascii=False).encode()
+    req = urllib.request.Request(
+        f"{origin}/api/publish",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}" if token else "",
+            "User-Agent": UA,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            print(r.read().decode())
+    except urllib.error.HTTPError as e:
+        eprint(f"publish 失敗: {e.code} {e.read().decode(errors='replace')}")
+        return 1
+    rec["published_at"] = datetime.now(timezone.utc).isoformat()
+    rec["completed_at"] = rec["published_at"]
+    save_state(cfg, state)
+    return 0
+
+
 def cmd_mail(cfg: dict, fid: str, to: str | None) -> int:
     if not cfg.get("steps", {}).get("mail", True):
         eprint("config.steps.mail が false")
@@ -815,6 +868,8 @@ def main() -> int:
     s = sub.add_parser("mail")
     s.add_argument("--id", required=True)
     s.add_argument("--to")
+    s = sub.add_parser("publish")
+    s.add_argument("id")
     s = sub.add_parser("done")
     s.add_argument("id")
     s = sub.add_parser("status")
@@ -855,6 +910,8 @@ def main() -> int:
         return cmd_render(cfg, args.id, args.template, notes)
     if args.cmd == "mail":
         return cmd_mail(cfg, args.id, args.to)
+    if args.cmd == "publish":
+        return cmd_publish(cfg, args.id)
     if args.cmd == "done":
         return cmd_done(cfg, args.id)
     if args.cmd == "status":

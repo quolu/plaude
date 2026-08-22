@@ -1,0 +1,11 @@
+# Append to /home/kite/license-server/Caddyfile with >> then:
+#   docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+
+plaud.kitepon.dev {
+	import cf-origin-tls
+	import security-headers-base
+	encode zstd gzip
+	reverse_proxy 192.168.1.2:18880 {
+		flush_interval -1
+	}
+}
