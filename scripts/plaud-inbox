@@ -1,11 +1,14 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Plaud NotePin の音声を自前経路で扱う手足。種類推定とテンプレ選択は GrokBot が行う。"""
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import shutil
+import smtplib
+import socket
 import subprocess
 import sys
 import time
@@ -13,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from email.message import EmailMessage
 from pathlib import Path
 
 API_BASE = "https://platform.plaud.ai/developer/api"
@@ -22,6 +26,12 @@ SKILL_DIR = Path(__file__).resolve().parent.parent
 EXAMPLE_CONFIG = SKILL_DIR / "config.example.json"
 DEFAULT_CONFIG = Path.home() / ".config/plaud-pipeline/config.json"
 TOKEN_PATH = Path.home() / ".plaud/tokens.json"
+_CONFIG_PATH = DEFAULT_CONFIG
+EXTRA_BIN_DIRS = (
+    Path.home() / ".local/bin",
+    Path("/usr/local/bin"),
+    Path("/opt/homebrew/bin"),
+)
 
 
 def eprint(*a):
@@ -32,18 +42,48 @@ def expand(p: str) -> Path:
     return Path(os.path.expanduser(p)).resolve()
 
 
+def set_config_path(path: str | None) -> None:
+    global _CONFIG_PATH
+    _CONFIG_PATH = expand(path) if path else DEFAULT_CONFIG
+
+
 def load_config() -> dict:
-    if not DEFAULT_CONFIG.exists():
-        DEFAULT_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        DEFAULT_CONFIG.write_text(EXAMPLE_CONFIG.read_text(), encoding="utf-8")
+    if not _CONFIG_PATH.exists():
+        _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CONFIG_PATH.write_text(EXAMPLE_CONFIG.read_text(), encoding="utf-8")
     cfg = json.loads(EXAMPLE_CONFIG.read_text())
-    cfg.update(json.loads(DEFAULT_CONFIG.read_text()))
+    cfg.update(json.loads(_CONFIG_PATH.read_text()))
     return cfg
 
 
 def save_config(cfg: dict) -> None:
-    DEFAULT_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    DEFAULT_CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def executable(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
+
+
+def resolve_bin(cfg: dict, key: str, names: list[str]) -> str:
+    configured = (cfg.get(key) or "").strip()
+    if configured:
+        raw = Path(os.path.expanduser(configured))
+        if executable(raw):
+            return str(raw.resolve())
+        found = shutil.which(configured)
+        if found:
+            return found
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return found
+        for d in EXTRA_BIN_DIRS:
+            cand = d / name
+            if executable(cand):
+                return str(cand)
+    eprint(f"{key} が見つからない。PATH か config.{key} に {names[0]} を置く")
+    raise SystemExit(1)
 
 
 def data_dir(cfg: dict) -> Path:
@@ -267,9 +307,12 @@ def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
         return 1
     state = load_state(cfg)
     dd = data_dir(cfg)
-    bin_ = cfg["whisper_bin"]
+    bin_ = resolve_bin(cfg, "whisper_bin", ["whisper-cli"])
     model = str(expand(cfg["whisper_model"]))
-    ffmpeg = cfg["ffmpeg_bin"]
+    if not Path(model).is_file():
+        eprint(f"whisper モデルがない: {model}")
+        return 1
+    ffmpeg = resolve_bin(cfg, "ffmpeg_bin", ["ffmpeg"])
     lang = cfg.get("whisper_language") or "ja"
     chunk_s = int(cfg.get("chunk_seconds") or 600)
     if not ids:
@@ -450,7 +493,133 @@ def cmd_notes(cfg: dict, fid: str, text: str | None) -> int:
     return 0
 
 
-def applescript_mail(to: str, subject: str, body_path: Path, attach: Path | None) -> None:
+def which_any(*names: str) -> str | None:
+    for name in names:
+        raw = Path(os.path.expanduser(name))
+        if executable(raw):
+            return str(raw.resolve())
+        found = shutil.which(name)
+        if found:
+            return found
+        if not raw.is_absolute():
+            for d in EXTRA_BIN_DIRS:
+                cand = d / name
+                if executable(cand):
+                    return str(cand)
+    return None
+
+
+def email_from(cfg: dict) -> str:
+    return (
+        (cfg.get("email_from") or "").strip()
+        or os.environ.get("EMAIL")
+        or f"{getpass.getuser()}@{socket.gethostname()}"
+    )
+
+
+def build_message(to: str, sender: str, subject: str, body: str, attach: Path | None) -> EmailMessage:
+    msg = EmailMessage()
+    msg["To"] = to
+    msg["From"] = sender
+    msg["Subject"] = subject
+    msg.set_content(body, subtype="plain", charset="utf-8")
+    if attach and attach.exists():
+        msg.add_attachment(
+            attach.read_bytes(),
+            maintype="text",
+            subtype="plain",
+            filename=attach.name,
+        )
+    return msg
+
+
+def sendmail_bin(cfg: dict) -> str | None:
+    configured = (cfg.get("mail_sendmail") or "").strip()
+    if configured:
+        return which_any(configured)
+    return which_any("sendmail", "/usr/sbin/sendmail", "/usr/lib/sendmail")
+
+
+def unix_mail_bin() -> str | None:
+    return which_any("mail", "mailx")
+
+
+def macos_mail_available() -> bool:
+    return bool(shutil.which("osascript"))
+
+
+def pick_mail_backend(cfg: dict) -> str:
+    explicit = (cfg.get("mail_backend") or "").strip().lower()
+    if explicit and explicit != "auto":
+        return explicit
+    if sendmail_bin(cfg):
+        return "sendmail"
+    if unix_mail_bin():
+        return "mail"
+    if (cfg.get("smtp_host") or "").strip():
+        return "smtp"
+    if macos_mail_available():
+        return "macos"
+    eprint("送信手段がない。sendmail か mail を入れるか、config.smtp_host を設定する")
+    raise SystemExit(1)
+
+
+def send_via_sendmail(cfg: dict, msg: EmailMessage) -> None:
+    bin_ = sendmail_bin(cfg)
+    if not bin_:
+        raise SystemExit("sendmail がない")
+    subprocess.run([bin_, "-t", "-i"], input=msg.as_bytes(), check=True)
+
+
+def send_via_unix_mail(to: str, subject: str, body: str, attach: Path | None) -> None:
+    bin_ = unix_mail_bin()
+    if not bin_:
+        raise SystemExit("mail / mailx がない")
+    variants: list[list[str]] = []
+    if attach and attach.exists():
+        variants.append([bin_, "-s", subject, "-A", str(attach), to])
+        variants.append([bin_, "-s", subject, "-a", str(attach), to])
+    variants.append([bin_, "-s", subject, to])
+    last: Exception | None = None
+    for cmd in variants:
+        try:
+            subprocess.run(cmd, input=body, text=True, check=True)
+            return
+        except subprocess.CalledProcessError as e:
+            last = e
+    if last:
+        raise last
+    raise SystemExit("mail 送信に失敗")
+
+
+def send_via_smtp(cfg: dict, msg: EmailMessage) -> None:
+    host = (cfg.get("smtp_host") or "").strip()
+    if not host:
+        raise SystemExit("config.smtp_host が未設定")
+    port = int(cfg.get("smtp_port") or 587)
+    user = (cfg.get("smtp_user") or "").strip()
+    password = os.environ.get("PLAUD_SMTP_PASSWORD") or ""
+    use_ssl = cfg.get("smtp_ssl")
+    if use_ssl is None:
+        use_ssl = port == 465
+    starttls = cfg.get("smtp_starttls")
+    if starttls is None:
+        starttls = not use_ssl
+    smtp_cls = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
+    with smtp_cls(host, port, timeout=30) as s:
+        if starttls and not use_ssl:
+            s.starttls()
+        if user:
+            if not password:
+                raise SystemExit("PLAUD_SMTP_PASSWORD が未設定")
+            s.login(user, password)
+        s.send_message(msg)
+
+
+def send_via_macos(to: str, subject: str, body_path: Path, attach: Path | None) -> None:
+    # leftover: macOS Mail.app. Linux では使わない。
+    if not macos_mail_available():
+        raise SystemExit("osascript がない（Mail.app は Mac の残り）")
     args = ["osascript", "-", to, subject, str(body_path)]
     if attach:
         args.append(str(attach))
@@ -476,6 +645,26 @@ end run
     subprocess.run(args, input=script, text=True, check=True)
 
 
+def send_mail(cfg: dict, to: str, subject: str, body_path: Path, attach: Path | None) -> None:
+    body = body_path.read_text(encoding="utf-8")
+    msg = build_message(to, email_from(cfg), subject, body, attach)
+    backend = pick_mail_backend(cfg)
+    if backend == "sendmail":
+        send_via_sendmail(cfg, msg)
+        return
+    if backend == "mail":
+        send_via_unix_mail(to, subject, body, attach)
+        return
+    if backend == "smtp":
+        send_via_smtp(cfg, msg)
+        return
+    if backend == "macos":
+        send_via_macos(to, subject, body_path, attach)
+        return
+    eprint(f"不明な mail_backend: {backend}")
+    raise SystemExit(1)
+
+
 def cmd_mail(cfg: dict, fid: str, to: str | None) -> int:
     if not cfg.get("steps", {}).get("mail", True):
         eprint("config.steps.mail が false")
@@ -492,7 +681,17 @@ def cmd_mail(cfg: dict, fid: str, to: str | None) -> int:
         return 1
     attach = Path(rec.get("transcript") or data_dir(cfg) / "transcripts" / f"{fid}.txt")
     subject = f"[Plaud] {rec.get('name') or fid}"
-    applescript_mail(to_addr, subject, doc, attach if attach.exists() else None)
+    try:
+        send_mail(cfg, to_addr, subject, doc, attach if attach.exists() else None)
+    except SystemExit as e:
+        eprint(f"{fid}: 送信失敗。done しない")
+        if e.code not in (None, 0, 1):
+            eprint(e.code)
+        return 1
+    except (subprocess.CalledProcessError, OSError, smtplib.SMTPException) as e:
+        eprint(f"{fid}: 送信失敗。done しない")
+        eprint(e)
+        return 1
     rec["mailed_at"] = datetime.now(timezone.utc).isoformat()
     rec["completed_at"] = rec["mailed_at"]
     save_state(cfg, state)
@@ -593,7 +792,7 @@ def cmd_prepare(cfg: dict) -> int:
 
 def main() -> int:
     p = argparse.ArgumentParser(prog="plaud-inbox")
-    p.add_argument("--config", help="unused; config is ~/.config/plaud-pipeline/config.json")
+    p.add_argument("--config", help="config.json（省略時は ~/.config/plaud-pipeline/config.json）")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("list-new")
@@ -626,6 +825,7 @@ def main() -> int:
     sub.add_parser("prepare")
 
     args = p.parse_args()
+    set_config_path(args.config)
     cfg = load_config()
     data_dir(cfg)
 

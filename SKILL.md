@@ -5,7 +5,7 @@ description: Plaud NotePin S の録音を公式CLI/APIで音声取得し、ロ�
 
 # Plaud pipeline
 
-手足は `plaud-inbox`。種類推定とテンプレ選択はこのエージェントが行う。Plaud の文字起こし分数は使わない。
+手足は `plaud-inbox`。種類推定とテンプレ選択はこのエージェントが行う。Plaud の文字起こし分数は使わない。ランタイムは Grok Bot 環境（Linux）。Mac / Mail.app は不要。
 
 ```
 plaud-inbox = ~/.grok/skills/plaud-pipeline/scripts/plaud-inbox
@@ -15,6 +15,8 @@ config      = ~/.config/plaud-pipeline/config.json
 設定変更は `plaud-inbox config` と `plaud-inbox config <key> <value>`。`steps.download` / `steps.transcribe` / `steps.mail` で各段を止められる。
 
 ## 1時間おき（GrokBot）
+
+Grok Bot 環境で回す。Mac は使わない。
 
 1. `plaud-inbox list-new --json`
 2. 各件: `plaud-inbox pull <id>` → `plaud-inbox transcribe <id>`
@@ -33,13 +35,13 @@ config      = ~/.config/plaud-pipeline/config.json
 |---|---|
 | `list-new --json` | 未完了の端末録音 |
 | `pull [id...]` | MP3 取得 |
-| `transcribe [id...]` | Whisper（10分チャンク） |
+| `transcribe [id...]` | ローカル Whisper（10分チャンク） |
 | `outline <id>` | 分類用の先頭テキスト |
 | `templates --json` | 選択可能なテンプレ |
 | `notes <id> --text` | Bot が書いた資料本文 |
 | `render --id --template` | テンプレ適用 |
-| `mail --id` | Mail.app で送信（文字起こしを添付） |
-| `done <id>` | 完了印（mail 成功時は自動） |
+| `mail --id` | config の `email_to` へ送信（文字起こしを添付） |
+| `done <id>` | 完了印（mail 成功時は自動。失敗時は付けない） |
 | `status --json` | 処理状態 |
 | `prepare` | 未処理を pull+transcribe まで一括 |
 
@@ -48,5 +50,6 @@ id なしの `pull` / `transcribe` は未完了分を対象にする。
 ## 制約
 
 - 認証は `~/.plaud/tokens.json`（`npx @plaud-ai/cli login`）。切れたら login をやり直す
-- 起こしは `whisper-cli` + `~/.local/share/whisper/ggml-small.bin`。Plaud のテンプレ生成は呼ばない
-- メール宛先の既定は config の `email_to`
+- 起こしは `whisper-cli` + `~/.local/share/whisper/ggml-small.bin`。Plaud のクラウド文字起こしとテンプレ生成は呼ばない
+- メール宛先の既定は config の `email_to`。送信は sendmail / `mail` / SMTP（`PLAUD_SMTP_PASSWORD`）。Mail.app は Mac の残り
+- トークン・個人 config・パスワードをリポジトリに書かない
