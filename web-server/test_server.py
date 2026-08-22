@@ -39,6 +39,16 @@ def main() -> int:
         assert meeting["has_audio"] is True
         st, headers, body = fetch(f"{base}/m/mock-safety/audio")
         assert st == 200 and headers.get_content_type() == "audio/mpeg" and len(body) > 0
+        ranged = urllib.request.Request(
+            f"{base}/m/mock-safety/audio",
+            headers={"Range": "bytes=0-31"},
+        )
+        with urllib.request.urlopen(ranged, timeout=5) as r:
+            assert r.status == 206
+            assert r.headers.get_content_type() == "audio/mpeg"
+            assert r.headers["Accept-Ranges"] == "bytes"
+            assert r.headers["Content-Range"].startswith("bytes 0-31/")
+            assert len(r.read()) == 32
         st, _, body = fetch(f"{base}/api/templates")
         tpls = json.loads(body)
         assert any(t["id"] == "lecture" for t in tpls), tpls
