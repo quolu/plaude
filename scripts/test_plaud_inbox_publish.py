@@ -52,6 +52,31 @@ def run_transcribe(config: Path, fid: str, env: dict[str, str]) -> subprocess.Co
     )
 
 
+def run_summarize(config: Path, fid: str, template: str, payload: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(INBOX), "--config", str(config), "summarize", "--id", fid, "--template", template, "--json", payload],
+        text=True, capture_output=True, check=False,
+    )
+
+
+def run_phases(config: Path, fid: str, payload: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(INBOX), "--config", str(config), "phases", "--id", fid, "--json", payload],
+        text=True, capture_output=True, check=False,
+    )
+
+
+SECTIONS = '{"概要": "要約の概要", "決定事項": "- 決めた", "宿題": "- ベル: 追う / 8-30"}'
+PHASES = '[{"t": 0, "title": "導入"}, {"t": 3, "title": "本題"}]'
+
+
+def prepare_summary(config: Path, fid: str) -> None:
+    r = run_summarize(config, fid, "meeting-minutes", SECTIONS)
+    assert r.returncode == 0, r.stderr
+    r = run_phases(config, fid, PHASES)
+    assert r.returncode == 0, r.stderr
+
+
 def configure(root: Path, origin: str) -> Path:
     config = root / "config.json"
     config.write_text(json.dumps({"data_dir": str(root / "data"), "site_origin": origin}), encoding="utf-8")
@@ -64,7 +89,7 @@ def seed(root: Path, fid: str) -> Path:
     (data / "notes").mkdir(exist_ok=True)
     transcript = data / "transcripts" / f"{fid}.txt"
     transcript.write_text("一行目\n二行目\n", encoding="utf-8")
-    (data / "notes" / f"{fid}.md").write_text("# 要約\n内容\n", encoding="utf-8")
+
     (data / "state.json").write_text(
         json.dumps({"files": {fid: {
             "name": "公開テスト",
@@ -130,16 +155,46 @@ def main() -> int:
             assert json.loads((ROOT / "config.example.json").read_text())["steps"]["mail"] is False
 
             PublishHandler.status = 200
+
+            # summarize 前は publish できない
+            blocked = run_publish(config, "ok")
+            assert blocked.returncode == 1, blocked.stdout
+            assert "summarize" in blocked.stderr
+
+            # 節が足りない要約は受け付けない
+            partial = run_summarize(config, "ok", "meeting-minutes", '{"概要": "だけ"}')
+            assert partial.returncode == 1
+            assert "決定事項" in partial.stderr
+
+            r = run_summarize(config, "ok", "meeting-minutes", SECTIONS)
+            assert r.returncode == 0, r.stderr
+
+            # phases 前は publish できない
+            blocked = run_publish(config, "ok")
+            assert blocked.returncode == 1, blocked.stdout
+            assert "phases" in blocked.stderr
+
+            # 単調でないフェーズは受け付けない
+            bad = run_phases(config, "ok", '[{"t": 3, "title": "後"}, {"t": 1, "title": "前"}]')
+            assert bad.returncode == 1
+            r = run_phases(config, "ok", PHASES)
+            assert r.returncode == 0, r.stderr
+
             result = run_publish(config, "ok")
             assert result.returncode == 0, result.stderr
             payload = PublishHandler.received[-1]
             assert payload["id"] == "ok"
             assert payload["title"] == "公開テスト"
-            assert payload["template_id"] == "meeting"
+            assert payload["template_id"] == "meeting-minutes"
             assert payload["transcript"] == [
                 {"t": 0, "speaker": "Speaker 1", "text": "一行目\n二行目"}
             ]
-            assert payload["summary"] == "# 要約\n内容\n"
+            assert "## 決定事項" in payload["summary"]
+            assert "- 決めた" in payload["summary"]
+            assert "文字起こし" not in payload["summary"]
+            assert payload["summary_struct"]["template_id"] == "meeting-minutes"
+            assert payload["summary_struct"]["sections"]["宿題"].startswith("- ベル")
+            assert payload["phases"] == [{"t": 0, "title": "導入"}, {"t": 3, "title": "本題"}]
             assert payload["audio_url"] == "https://audio.example.test/recording.mp3"
             complete = json.loads(state.read_text())["files"]["ok"]
             assert complete["published_at"] == complete["completed_at"]
@@ -154,6 +209,7 @@ def main() -> int:
             json_data = json.loads(json_state.read_text())
             json_data["files"]["json"]["transcript_json"] = str(result_path)
             json_state.write_text(json.dumps(json_data), encoding="utf-8")
+            prepare_summary(config, "json")
             result = run_publish(config, "json")
             assert result.returncode == 0, result.stderr
             assert PublishHandler.received[-1]["transcript"] == segments

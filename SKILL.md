@@ -21,9 +21,9 @@ Grok Bot 環境で回す。Mac は使わない。
 1. `plaud-inbox list-new --json`
 2. 各件: `plaud-inbox pull <id>` → `plaud-inbox transcribe <id>`（SSH で asr-worker の投函箱へ音声を渡し、`result.json` を回収する）
 3. `plaud-inbox outline <id>` の `outline` から文章の種類を推定する
-4. `plaud-inbox templates --json` の `when` と照合し、テンプレ `id` を1つ選ぶ
-5. 資料本文（概要・決定・宿題など）を書き、`plaud-inbox notes <id> --text '...'` に渡す
-6. `plaud-inbox render --id <id> --template <template_id>`
+4. `plaud-inbox templates --json` の `when` と照合し、テンプレ `id` を1つ選ぶ。同じ JSON の `sections` が、そのテンプレで**書かなければならない節**と各節の記入指示
+5. `plaud-inbox phases --id <id> --json '[{"t": 0, "title": "開会挨拶"}, ...]'`（会議をフェーズへ分ける。`t` は元音声の絶対秒で、`result.json` の `segments` の時刻から取る）
+6. `plaud-inbox summarize --id <id> --template <template_id> --json '{"節名": "本文", ...}'`（節をすべて埋める。1つでも欠けると失敗する）
 7. `plaud-inbox publish <id>`（`site_origin` の `/api/publish` へ meta / transcript / summary を送る。音声は MS-A2 が Plaud から pull）
 8. `mail` は呼ばない。送れない・起こし失敗は `done` せず次週に残す。デモ音（シリアルが `882` 以外）は `list-new` に出ない。publish が成功した時だけ completed になる
 
@@ -38,8 +38,8 @@ Grok Bot 環境で回す。Mac は使わない。
 | `transcribe [id...]` | LAN 内 asr-worker へ SSH 投函し、完了まで status をポーリングして `result.json` を回収 |
 | `outline <id>` | 分類用の先頭テキスト |
 | `templates --json` | 選択可能なテンプレ |
-| `notes <id> --text` | Bot が書いた資料本文 |
-| `render --id --template` | テンプレ適用 |
+| `phases --id --json` | フェーズ（章）分け。`[{"t": 秒, "title": "章名"}]` |
+| `summarize --id --template --json` | テンプレの節ごとに本文を埋め、公開する要約を作る |
 | `mail --id` | 明示的に有効化した場合だけ使う任意の残り |
 | `publish <id>` | サイト API へ会議を載せる |
 | `done <id>` | 完了印（publish 成功時は自動。失敗時は付けない） |
@@ -52,5 +52,8 @@ id なしの `pull` / `transcribe` は未完了分を対象にする。
 
 - 認証は `~/.plaud/tokens.json`（`npx @plaud-ai/cli login`）。切れたら login をやり直す
 - 起こしは config のフラットな `asr_host` / `asr_engine` で指定する LAN 内 asr-worker の SSH 投函箱だけ。Plaud のクラウド文字起こし、ローカル Whisper の直叩き、テンプレ生成は呼ばない
+- **フェーズと要約は publish の必須条件**。`phases` と `summarize` を済ませていない id は publish できない（失敗して done しない）
+- フェーズは実際の話の切れ目で切る。長さを揃えるための機械的な等分割をしない。冒頭は 60 秒以内から始める
+- 節に書くことが無ければ「なし」「未定」「明示なし」と書く。空文字は受け付けない
 - メール宛先の既定は config の `email_to`。送信は sendmail / `mail` / SMTP（`PLAUD_SMTP_PASSWORD`）。Mail.app は Mac の残り
 - トークン・個人 config・パスワードをリポジトリに書かない

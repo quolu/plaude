@@ -36,3 +36,10 @@ audio { width: 100%; margin: 8px 0 16px; }
   .app { grid-template-columns: 1fr; }
   .layout, .row { grid-template-columns: 1fr; }
 }
+
+.phase { margin: 0 0 24px; }
+.phase-head { display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: baseline;
+  margin: 0 0 8px; padding: 10px 0 6px; border-bottom: 1px solid var(--line);
+  font-size: 15px; cursor: pointer; }
+.phase-head time { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 400; }
+.toc a time { display: inline-block; width: 62px; font-variant-numeric: tabular-nums; }

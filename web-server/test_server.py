@@ -96,8 +96,9 @@ def main() -> int:
                 "title": "probe",
                 "started_at": "2026-08-22T00:00:00",
                 "duration": "6秒",
-                "transcript": [{"t": 0, "text": "hi"}],
+                "transcript": [{"t": 0, "text": "hi"}, {"t": 5, "text": "next"}],
                 "summary": "短い試験",
+                "phases": [{"t": 0, "title": "冒頭"}, {"t": 5, "title": "本題"}],
                 "audio_url": audio_url,
             }).encode(),
             method="POST",
@@ -107,6 +108,7 @@ def main() -> int:
             published = json.loads(r.read())
         assert published["title"] == "probe"
         assert published["has_audio"] is True
+        assert published["phases"] == [{"t": 0, "title": "冒頭"}, {"t": 5, "title": "本題"}]
         st, headers, body = fetch(f"{base}/m/probe-publish/audio")
         assert st == 200 and headers.get_content_type() == "audio/mpeg" and body == expected_audio
         print("origin probes ok", meeting["title"])

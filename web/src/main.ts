@@ -5,11 +5,13 @@ type MeetingListItem = {
   duration: string;
 };
 type Segment = { t: number; speaker?: string; text: string };
+type Phase = { t: number; title: string };
 type Meeting = MeetingListItem & {
   transcript: Segment[];
   summary: string;
   has_audio: boolean;
   template_id?: string;
+  phases: Phase[];
 };
 type Template = {
   id: string;
@@ -82,11 +84,24 @@ async function renderMeeting(id: string, tab: string) {
   const audio = m.has_audio
     ? `<audio id="player" controls src="/m/${id}/audio"></audio>`
     : "";
-  const transcript = (m.transcript || [])
-    .map(
-      (s) =>
-        `<div class="seg" data-t="${s.t}"><time>${fmtTime(s.t)}</time><div>${s.text}</div></div>`,
-    )
+  const segs = m.transcript || [];
+  const phases = m.phases || [];
+  const seg = (s: Segment) =>
+    `<div class="seg" data-t="${s.t}"><time>${fmtTime(s.t)}</time><div>${s.text}</div></div>`;
+  let transcript: string;
+  if (phases.length) {
+    transcript = phases
+      .map((p, i) => {
+        const end = i + 1 < phases.length ? phases[i + 1].t : Infinity;
+        const body = segs.filter((s) => s.t >= p.t && s.t < end).map(seg).join("");
+        return `<section class="phase" id="p-${i}"><h3 class="phase-head" data-t="${p.t}"><time>${fmtTime(p.t)}</time>${p.title}</h3>${body}</section>`;
+      })
+      .join("");
+  } else {
+    transcript = segs.map(seg).join("");
+  }
+  const phaseNav = phases
+    .map((p, i) => `<a href="/m/${id}?p=${i}" data-jump="${i}"><time>${fmtTime(p.t)}</time>${p.title}</a>`)
     .join("");
   app.innerHTML = `<div class="app">${rail("files")}<main class="main">
     <div class="hero"><h2>${m.title}</h2><div class="muted">${m.started_at.replace("T", " ")} · ${m.duration}</div>${audio}</div>
@@ -96,7 +111,7 @@ async function renderMeeting(id: string, tab: string) {
     </div>
     <div class="layout">
       <div id="pane">${tab === "summary" ? renderMd(m.summary || "（未記入）") : transcript}</div>
-      <aside class="toc">${toc.map((h) => `<a href="#${h.id}">${h.text}</a>`).join("")}</aside>
+      <aside class="toc">${tab === "summary" ? toc.map((h) => `<a href="#${h.id}">${h.text}</a>`).join("") : phaseNav}</aside>
     </div>
   </main></div>`;
   app.querySelectorAll("[data-tab]").forEach((btn) => {
@@ -107,6 +122,22 @@ async function renderMeeting(id: string, tab: string) {
   });
   const player = document.getElementById("player") as HTMLAudioElement | null;
   bindTranscriptSeek(app, player);
+  const jumpTo = (i: number) => {
+    const target = document.getElementById(`p-${i}`);
+    if (target) target.scrollIntoView({ block: "start" });
+    if (player && phases[i]) player.currentTime = phases[i].t;
+  };
+  app.querySelectorAll("[data-jump]").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const i = Number((a as HTMLElement).dataset.jump);
+      history.replaceState({}, "", `/m/${id}?p=${i}`);
+      jumpTo(i);
+    });
+  });
+  const want = new URLSearchParams(location.search).get("p");
+  if (want !== null && phases[Number(want)]) jumpTo(Number(want));
 }
 
 async function renderTemplates(editId?: string) {

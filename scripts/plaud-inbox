@@ -90,7 +90,7 @@ def resolve_bin(cfg: dict, key: str, names: list[str]) -> str:
 
 def data_dir(cfg: dict) -> Path:
     d = expand(cfg["data_dir"])
-    for sub in ("audio", "chunks", "transcripts", "notes", "docs"):
+    for sub in ("audio", "chunks", "transcripts", "notes", "docs", "phases"):
         (d / sub).mkdir(parents=True, exist_ok=True)
     return d
 
@@ -425,6 +425,18 @@ def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
     return 0
 
 
+def parse_sections(body: str) -> list[dict]:
+    """`## 見出し` を節、直下の `>` 行を記入指示として読む。"""
+    sections: list[dict] = []
+    for line in body.splitlines():
+        if line.startswith("## "):
+            sections.append({"key": line[3:].strip(), "ask": ""})
+        elif line.startswith(">") and sections:
+            ask = line.lstrip(">").strip()
+            sections[-1]["ask"] = (sections[-1]["ask"] + " " + ask).strip()
+    return sections
+
+
 def parse_template(path: Path) -> dict:
     text = path.read_text(encoding="utf-8")
     meta = {"id": path.stem, "title": path.stem, "when": "", "body": text}
@@ -436,6 +448,7 @@ def parse_template(path: Path) -> dict:
                 continue
             k, v = line.split(":", 1)
             meta[k.strip()] = v.strip()
+    meta["sections"] = parse_sections(meta["body"])
     meta["path"] = str(path)
     return meta
 
@@ -445,12 +458,18 @@ def templates() -> list[dict]:
 
 
 def cmd_templates(as_json: bool) -> int:
-    rows = [{"id": t["id"], "title": t["title"], "when": t["when"]} for t in templates()]
+    tpls = templates()
     if as_json:
+        rows = [
+            {"id": t["id"], "title": t["title"], "when": t["when"], "sections": t["sections"]}
+            for t in tpls
+        ]
         print(json.dumps(rows, ensure_ascii=False, indent=2))
         return 0
-    for t in rows:
-        print(f"{t['id']:20}  {t['title']:10}  {t['when']}")
+    for t in tpls:
+        keys = " / ".join(s["key"] for s in t["sections"])
+        print(f"{t['id']:24}  {t['title']:12}  {t['when']}")
+        print(f"{'':24}  節: {keys}")
     return 0
 
 
@@ -477,16 +496,53 @@ def cmd_outline(cfg: dict, fid: str) -> int:
     return 0
 
 
-def fill(body: str, mapping: dict[str, str]) -> str:
-    for k, v in mapping.items():
-        body = body.replace("{{" + k + "}}", v or "")
-    return body
+def render_doc(tpl: dict, rec: dict, fid: str, filled: dict[str, str]) -> str:
+    head = [
+        f"# {rec.get('name') or fid}",
+        "",
+        f"- 録音: {rec.get('start_at') or ''} / {fmt_duration(rec.get('duration_ms'))}",
+        f"- テンプレ: {tpl['title']}（{tpl['id']}）",
+        "",
+    ]
+    for sec in tpl["sections"]:
+        head.append(f"## {sec['key']}")
+        head.append(filled[sec["key"]].strip())
+        head.append("")
+    return "\n".join(head).rstrip() + "\n"
 
 
-def cmd_render(cfg: dict, fid: str, template_id: str, notes: str | None) -> int:
+def cmd_summarize(cfg: dict, fid: str, template_id: str, payload: str | None, path: str | None) -> int:
     tpls = {t["id"]: t for t in templates()}
     if template_id not in tpls:
-        eprint(f"不明なテンプレ: {template_id}")
+        eprint(f"不明なテンプレ: {template_id}（plaud-inbox templates --json で確認）")
+        return 1
+    tpl = tpls[template_id]
+    if not tpl["sections"]:
+        eprint(f"{template_id}: 節が定義されていないテンプレ")
+        return 1
+    raw = payload
+    if path:
+        raw = Path(expand(path)).read_text(encoding="utf-8")
+    if raw is None:
+        eprint("--json か --file で節ごとの本文を渡す")
+        return 1
+    try:
+        given = json.loads(raw)
+    except json.JSONDecodeError as e:
+        eprint(f"JSON として読めない: {e}")
+        return 1
+    if not isinstance(given, dict):
+        eprint("節名をキーにした JSON オブジェクトで渡す")
+        return 1
+    want = [sec["key"] for sec in tpl["sections"]]
+    missing = [k for k in want if not str(given.get(k) or "").strip()]
+    unknown = [k for k in given if k not in want]
+    if missing or unknown:
+        if missing:
+            eprint(f"未記入の節: {', '.join(missing)}")
+        if unknown:
+            eprint(f"このテンプレに無い節: {', '.join(unknown)}")
+        eprint(f"必要な節: {', '.join(want)}")
         return 1
     state = load_state(cfg)
     rec = file_rec(state, fid)
@@ -495,44 +551,73 @@ def cmd_render(cfg: dict, fid: str, template_id: str, notes: str | None) -> int:
     if not tr_path.exists():
         eprint(f"{fid}: 先に transcribe")
         return 1
-    notes_text = notes or ""
-    if not notes_text:
-        np = dd / "notes" / f"{fid}.md"
-        if np.exists():
-            notes_text = np.read_text(encoding="utf-8")
-    doc = fill(
-        tpls[template_id]["body"],
-        {
-            "title": rec.get("name") or fid,
-            "start_at": rec.get("start_at") or "",
-            "duration": fmt_duration(rec.get("duration_ms")),
-            "file_id": fid,
-            "template_id": template_id,
-            "notes": notes_text.strip() or "（未記入）",
-            "transcript": tr_path.read_text(encoding="utf-8").strip(),
-        },
-    )
-    out = dd / "docs" / f"{fid}.md"
-    out.write_text(doc, encoding="utf-8")
+    filled = {k: str(given[k]) for k in want}
+    notes_p = dd / "notes" / f"{fid}.json"
+    notes_p.write_text(json.dumps(filled, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    doc = dd / "docs" / f"{fid}.md"
+    doc.write_text(render_doc(tpl, rec, fid, filled), encoding="utf-8")
     rec["template"] = template_id
+    rec["notes_json"] = str(notes_p)
+    rec["doc"] = str(doc)
     rec["rendered_at"] = datetime.now(timezone.utc).isoformat()
-    rec["doc"] = str(out)
     save_state(cfg, state)
-    print(out)
+    print(doc)
     return 0
 
 
-def cmd_notes(cfg: dict, fid: str, text: str | None) -> int:
-    dd = data_dir(cfg)
-    path = dd / "notes" / f"{fid}.md"
-    if text is None:
-        if path.exists():
-            sys.stdout.write(path.read_text(encoding="utf-8"))
-            return 0
-        eprint(f"{fid}: notes なし")
+def cmd_phases(cfg: dict, fid: str, payload: str | None, path: str | None) -> int:
+    """会議をフェーズ（章）へ分ける。t は元音声の絶対秒。"""
+    raw = payload
+    if path:
+        raw = Path(expand(path)).read_text(encoding="utf-8")
+    if raw is None:
+        eprint("--json か --file で [{\"t\": 秒, \"title\": \"章名\"}, ...] を渡す")
         return 1
-    path.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
-    print(path)
+    try:
+        given = json.loads(raw)
+    except json.JSONDecodeError as e:
+        eprint(f"JSON として読めない: {e}")
+        return 1
+    if not isinstance(given, list) or not given:
+        eprint("1つ以上のフェーズを持つ配列で渡す")
+        return 1
+    state = load_state(cfg)
+    rec = file_rec(state, fid)
+    duration_s = (rec.get("duration_ms") or 0) / 1000
+    phases = []
+    prev = -1.0
+    for i, item in enumerate(given):
+        if not isinstance(item, dict):
+            eprint(f"{i}番目: オブジェクトでない")
+            return 1
+        title = str(item.get("title") or "").strip()
+        if not title:
+            eprint(f"{i}番目: title が空")
+            return 1
+        try:
+            t = float(item.get("t"))
+        except (TypeError, ValueError):
+            eprint(f"{i}番目（{title}）: t が数値でない")
+            return 1
+        if t < 0:
+            eprint(f"{i}番目（{title}）: t が負")
+            return 1
+        if t <= prev:
+            eprint(f"{i}番目（{title}）: t={t} が直前の {prev} 以下。開始秒は単調増加でなければならない")
+            return 1
+        if duration_s and t > duration_s:
+            eprint(f"{i}番目（{title}）: t={t} が音声長 {duration_s:.1f} 秒を超えている")
+            return 1
+        prev = t
+        phases.append({"t": t, "title": title})
+    if phases[0]["t"] > 60:
+        eprint(f"最初のフェーズが {phases[0]['t']} 秒から始まっている。冒頭が抜けていないか確認する")
+        return 1
+    out = data_dir(cfg) / "phases" / f"{fid}.json"
+    out.write_text(json.dumps(phases, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    rec["phases"] = str(out)
+    save_state(cfg, state)
+    print(f"{len(phases)} フェーズ -> {out}")
     return 0
 
 
@@ -734,8 +819,23 @@ def cmd_publish(cfg: dict, fid: str) -> int:
     if not tr_path.exists():
         eprint(f"{fid}: 先に transcribe")
         return 1
-    notes_p = dd / "notes" / f"{fid}.md"
-    summary = notes_p.read_text(encoding="utf-8") if notes_p.exists() else ""
+    doc_p = Path(rec.get("doc") or dd / "docs" / f"{fid}.md")
+    if not doc_p.exists():
+        eprint(f"{fid}: 先に summarize（テンプレ適用済みの要約が要る）")
+        return 1
+    summary = doc_p.read_text(encoding="utf-8")
+    notes_p = Path(rec.get("notes_json") or dd / "notes" / f"{fid}.json")
+    summary_struct = None
+    if notes_p.exists():
+        summary_struct = {
+            "template_id": rec.get("template"),
+            "sections": json.loads(notes_p.read_text(encoding="utf-8")),
+        }
+    phases_p = Path(rec.get("phases") or dd / "phases" / f"{fid}.json")
+    if not phases_p.exists():
+        eprint(f"{fid}: 先に phases（フェーズ分けが要る）")
+        return 1
+    phases = json.loads(phases_p.read_text(encoding="utf-8"))
     audio_url = rec.get("audio_url")
     if not audio_url:
         try:
@@ -755,6 +855,8 @@ def cmd_publish(cfg: dict, fid: str) -> int:
         "template_id": rec.get("template"),
         "transcript": transcript_segments(tr_path.read_text(encoding="utf-8"), rec.get("transcript_json")),
         "summary": summary,
+        "summary_struct": summary_struct,
+        "phases": phases,
         "audio_url": audio_url,
     }
     body = json.dumps(payload, ensure_ascii=False).encode()
@@ -923,13 +1025,15 @@ def main() -> int:
     s.add_argument("--json", action="store_true")
     s = sub.add_parser("outline")
     s.add_argument("id")
-    s = sub.add_parser("notes")
-    s.add_argument("id")
-    s.add_argument("--text")
-    s = sub.add_parser("render")
+    s = sub.add_parser("phases")
+    s.add_argument("--id", required=True)
+    s.add_argument("--json", dest="payload")
+    s.add_argument("--file")
+    s = sub.add_parser("summarize")
     s.add_argument("--id", required=True)
     s.add_argument("--template", required=True)
-    s.add_argument("--notes")
+    s.add_argument("--json", dest="payload")
+    s.add_argument("--file")
     s = sub.add_parser("mail")
     s.add_argument("--id", required=True)
     s.add_argument("--to")
@@ -959,20 +1063,20 @@ def main() -> int:
         return cmd_templates(args.json)
     if args.cmd == "outline":
         return cmd_outline(cfg, args.id)
-    if args.cmd == "notes":
-        text = args.text
-        if text is None and not sys.stdin.isatty():
+    if args.cmd == "phases":
+        payload = args.payload
+        if payload is None and not args.file and not sys.stdin.isatty():
             incoming = sys.stdin.read()
-            if incoming:
-                text = incoming
-        return cmd_notes(cfg, args.id, text)
-    if args.cmd == "render":
-        notes = args.notes
-        if notes is None and not sys.stdin.isatty():
+            if incoming.strip():
+                payload = incoming
+        return cmd_phases(cfg, args.id, payload, args.file)
+    if args.cmd == "summarize":
+        payload = args.payload
+        if payload is None and not args.file and not sys.stdin.isatty():
             incoming = sys.stdin.read()
-            if incoming:
-                notes = incoming
-        return cmd_render(cfg, args.id, args.template, notes)
+            if incoming.strip():
+                payload = incoming
+        return cmd_summarize(cfg, args.id, args.template, payload, args.file)
     if args.cmd == "mail":
         return cmd_mail(cfg, args.id, args.to)
     if args.cmd == "publish":

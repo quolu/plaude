@@ -19,7 +19,8 @@ Plaud NotePin S の端末録音を、Plaud のクラウド文字起こし分数�
 | パス | 中身 |
 |---|---|
 | `/` | 会議一覧 |
-| `/m/<id>` | プレイヤー + 文字起こし / 要約 |
+| `/m/<id>` | プレイヤー + 文字起こし（フェーズ見出しで章分け）/ 要約 |
+| `/m/<id>?p=<n>` | フェーズ n へ直リンク（音声も該当時刻へ移動する） |
 | `/templates` | テンプレ一覧・作成・編集 |
 | `/m/<id>/audio` | 同一オリジンの MP3（Range / 206 でシーク可能） |
 
@@ -40,7 +41,7 @@ image は Mac で `web/` を build してから linux/amd64 で送り、MS-A2 �
 `DATA_DIR`（コンテナは `/data`）:
 
 ```
-meetings/<id>/{meta.json,transcript.json,summary.md|summary.json,audio.mp3}
+meetings/<id>/{meta.json,transcript.json,summary.md|summary.json,phases.json,audio.mp3}
 templates/<id>.md
 ```
 
@@ -54,7 +55,10 @@ templates/<id>.md
 
 - 起こしは LAN 内 `asr-worker` の SSH 投函箱（`asr_host` / `asr_engine`）だけ。Plaud クラウドの文字起こし、ローカル Whisper の直叩き、テンプレ生成は呼ばない
 - メールは本線ではない。既定は `steps.mail=false`
-- `publish` は `site_origin` へ meta / transcript / summary を載せる。音声は origin 側が Plaud から pull する
+- `publish` は `site_origin` へ meta / transcript / summary / summary_struct / phases を載せる。音声は origin 側が Plaud から pull する
+- **テンプレは要約の器であり、要約そのものを規定する**。テンプレ本文の `## 見出し` が節、直下の `>` 行がその節の記入指示。`summarize` は全節が埋まっている時だけ成功し、その出力（`docs/<id>.md`）が publish する summary の正本になる。文字起こし本文をテンプレへ埋め込まない
+- **フェーズ（章）は成果物の一部**。`phases` が `[{"t": 絶対秒, "title": 章名}]` を検証（単調増加・音声長以内・冒頭 60 秒以内）して保存し、閲覧面は章目次・章ごとの折り返し・`?p=<n>` の直リンクを出す
+- `phases` と `summarize` を済ませない限り `publish` は失敗する。握りつぶして公開しない
 - 認証は `~/.plaud/tokens.json`。個人 config は `~/.config/plaud-pipeline/config.json`
 - トークン・個人 config・パスワード・録音本文をリポジトリに書かない
 - 端末録音（シリアル `882` 始まり）だけを対象にする。デモ音は `list-new` に出さない

@@ -38,6 +38,8 @@ def load_meeting(data: Path, mid: str) -> dict | None:
     summary_obj = json.loads(sum_json.read_text(encoding="utf-8")) if sum_json.is_file() else None
     if summary_obj and not summary_text:
         summary_text = summary_obj.get("summary") or ""
+    ph_p = d / "phases.json"
+    phases = json.loads(ph_p.read_text(encoding="utf-8")) if ph_p.is_file() else []
     audio = d / "audio.mp3"
     return {
         "id": mid,
@@ -50,6 +52,7 @@ def load_meeting(data: Path, mid: str) -> dict | None:
         "transcript": transcript,
         "summary": summary_text,
         "summary_struct": summary_obj,
+        "phases": phases,
     }
 
 
@@ -146,6 +149,10 @@ def save_meeting(data: Path, mid: str, payload: dict) -> dict:
         )
     if "summary" in payload and isinstance(payload["summary"], str):
         (d / "summary.md").write_text(payload["summary"] if payload["summary"].endswith("\n") else payload["summary"] + "\n", encoding="utf-8")
+    if "phases" in payload and isinstance(payload["phases"], list):
+        (d / "phases.json").write_text(
+            json.dumps(payload["phases"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
     if "summary_struct" in payload and payload["summary_struct"] is not None:
         (d / "summary.json").write_text(
             json.dumps(payload["summary_struct"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
