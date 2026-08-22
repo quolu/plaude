@@ -6,7 +6,9 @@ import argparse
 import getpass
 import json
 import os
+import re
 import shutil
+import shlex
 import smtplib
 import socket
 import subprocess
@@ -302,20 +304,79 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
+class WorkerTranscribeError(RuntimeError):
+    def __init__(self, code: str, detail: str):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+
+
+def worker_call(cmd: list[str]) -> str:
+    try:
+        result = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    except OSError as e:
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_UNREACHABLE", str(e)) from e
+    if result.returncode:
+        detail = (result.stderr or result.stdout or f"exit {result.returncode}").strip()
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_UNREACHABLE", detail)
+    return result.stdout
+
+
+def worker_job_id(fid: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", fid):
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_PROTOCOL_ERROR", "不正な録音 ID")
+    return fid
+
+
+def worker_engine(cfg: dict) -> str:
+    engine = str(cfg.get("asr_engine") or "whisper")
+    if engine not in {"whisper", "parakeet", "qwen"}:
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_PROTOCOL_ERROR", f"不正な asr_engine: {engine}")
+    return engine
+
+
+def worker_status(host: str, fid: str) -> dict:
+    raw = worker_call(["ssh", host, f"cat ~/asr/jobs/{fid}/status.json"])
+    try:
+        status = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_PROTOCOL_ERROR", "status.json が JSON ではない") from e
+    if not isinstance(status, dict):
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_PROTOCOL_ERROR", "status.json が object ではない")
+    return status
+
+
+def worker_result_segments(path: Path) -> tuple[dict, list[dict]]:
+    try:
+        result = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_INVALID_RESULT", "result.json を読めない") from e
+    segments = result.get("segments") if isinstance(result, dict) else None
+    if not isinstance(result, dict) or result.get("schema") != "asr-worker.result.v1" or not isinstance(segments, list):
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_INVALID_RESULT", "result.json が asr-worker.result.v1 ではない")
+    if not all(isinstance(segment, dict) for segment in segments):
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_INVALID_RESULT", "result.json の segments が不正")
+    return result, segments
+
+
+def mark_transcribe_error(cfg: dict, state: dict, fid: str, rec: dict, error: WorkerTranscribeError) -> int:
+    rec.pop("transcribed_at", None)
+    rec.pop("transcript", None)
+    rec.pop("transcript_json", None)
+    rec.pop("engine", None)
+    rec["transcribe_error"] = {"code": error.code, "detail": error.detail}
+    save_state(cfg, state)
+    eprint(f"{fid}: {error.code}: {error.detail}")
+    return 1
+
+
 def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
     if not cfg.get("steps", {}).get("transcribe", True):
         eprint("config.steps.transcribe が false")
         return 1
     state = load_state(cfg)
     dd = data_dir(cfg)
-    bin_ = resolve_bin(cfg, "whisper_bin", ["whisper-cli"])
-    model = str(expand(cfg["whisper_model"]))
-    if not Path(model).is_file():
-        eprint(f"whisper モデルがない: {model}")
-        return 1
-    ffmpeg = resolve_bin(cfg, "ffmpeg_bin", ["ffmpeg"])
-    lang = cfg.get("whisper_language") or "ja"
-    chunk_s = int(cfg.get("chunk_seconds") or 600)
+    host = str(cfg.get("asr_host") or "fox-wsl")
     if not ids:
         ids = [
             fid
@@ -328,57 +389,38 @@ def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
         if not src.exists():
             eprint(f"{fid}: 先に pull")
             return 1
-        chunk_dir = dd / "chunks" / fid
-        if chunk_dir.exists():
-            shutil.rmtree(chunk_dir)
-        chunk_dir.mkdir(parents=True)
-        run(
-            [
-                ffmpeg,
-                "-y",
-                "-loglevel",
-                "error",
-                "-i",
-                str(src),
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
-                "-f",
-                "segment",
-                "-segment_time",
-                str(chunk_s),
-                "-reset_timestamps",
-                "1",
-                str(chunk_dir / "c%03d.wav"),
-            ]
-        )
-        wavs = sorted(chunk_dir.glob("c*.wav"))
-        parts: list[str] = []
-        for wav in wavs:
-            stem = wav.with_suffix("")
-            run(
-                [
-                    bin_,
-                    "-m",
-                    model,
-                    "-l",
-                    lang,
-                    "-otxt",
-                    "-of",
-                    str(stem),
-                    "-f",
-                    str(wav),
-                ]
-            )
-            txt = Path(str(stem) + ".txt")
-            parts.append(txt.read_text(encoding="utf-8") if txt.exists() else "")
+        try:
+            job = worker_job_id(fid)
+            engine = worker_engine(cfg)
+            worker_call(["ssh", host, f"mkdir -p ~/asr/inbox/{job}"])
+            worker_call(["scp", str(src), f"{host}:~/asr/inbox/{job}/audio.mp3"])
+            worker_call(["ssh", host, f"~/asr/bin/submit {shlex.quote(job)} --engine {shlex.quote(engine)}"])
+            while True:
+                status = worker_status(host, job)
+                state_name = status.get("status")
+                if state_name == "done":
+                    break
+                if state_name == "failed":
+                    reason = str(status.get("reason") or "worker が失敗を返した")
+                    raise WorkerTranscribeError("TRANSCRIBE_WORKER_FAILED", reason)
+                if state_name not in {"queued", "running"}:
+                    raise WorkerTranscribeError("TRANSCRIBE_WORKER_PROTOCOL_ERROR", f"未知の worker status: {state_name!r}")
+                time.sleep(2)
+            result_path = dd / "transcripts" / f"{fid}.json"
+            worker_call(["scp", f"{host}:~/asr/jobs/{job}/result.json", str(result_path)])
+            result, segments = worker_result_segments(result_path)
+        except WorkerTranscribeError as e:
+            return mark_transcribe_error(cfg, state, fid, rec, e)
         out = dd / "transcripts" / f"{fid}.txt"
-        out.write_text("\n".join(p.strip() for p in parts if p.strip()) + "\n", encoding="utf-8")
-        rec["transcribed_at"] = datetime.now(timezone.utc).isoformat()
-        rec["transcript"] = str(out)
+        out.write_text("\n".join(str(segment.get("text") or "") for segment in segments) + "\n", encoding="utf-8")
+        rec.update({
+            "transcribed_at": datetime.now(timezone.utc).isoformat(),
+            "transcript": str(out),
+            "transcript_json": str(result_path),
+            "engine": result.get("engine") or engine,
+        })
+        rec.pop("transcribe_error", None)
         save_state(cfg, state)
-        shutil.rmtree(chunk_dir, ignore_errors=True)
         print(out)
     return 0
 
@@ -666,7 +708,15 @@ def send_mail(cfg: dict, to: str, subject: str, body_path: Path, attach: Path | 
     raise SystemExit(1)
 
 
-def transcript_segments(text: str) -> list[dict]:
+def transcript_segments(text: str, transcript_json: str | None = None) -> list[dict]:
+    if transcript_json:
+        try:
+            result = json.loads(Path(transcript_json).read_text(encoding="utf-8"))
+            segments = result.get("segments") if isinstance(result, dict) else None
+            if isinstance(segments, list) and all(isinstance(segment, dict) for segment in segments):
+                return segments
+        except (OSError, json.JSONDecodeError):
+            pass
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     return [{"t": 0, "speaker": "Speaker 1", "text": "\n".join(lines)}] if lines else []
 
@@ -703,7 +753,7 @@ def cmd_publish(cfg: dict, fid: str) -> int:
         "duration": fmt_duration(rec.get("duration_ms")),
         "duration_ms": rec.get("duration_ms"),
         "template_id": rec.get("template"),
-        "transcript": transcript_segments(tr_path.read_text(encoding="utf-8")),
+        "transcript": transcript_segments(tr_path.read_text(encoding="utf-8"), rec.get("transcript_json")),
         "summary": summary,
         "audio_url": audio_url,
     }

@@ -1,6 +1,6 @@
 ---
 name: plaud-pipeline
-description: Plaud NotePin S の録音を公式CLI/APIで音声取得し、ローカルWhisperで文字起こし、テンプレで資料化して plaud.kitepon.dev に載せる。GrokBotの1時間おきチェック、議事録、テンプレート選択、NotePin 取り込みに使う。Use when the user runs /plaud-pipeline.
+description: Plaud NotePin S の録音を公式CLI/APIで音声取得し、LAN内 asr-worker で文字起こし、テンプレで資料化して plaud.kitepon.dev に載せる。GrokBotの1時間おきチェック、議事録、テンプレート選択、NotePin 取り込みに使う。Use when the user runs /plaud-pipeline.
 ---
 
 # Plaud pipeline
@@ -19,7 +19,7 @@ config      = ~/.config/plaud-pipeline/config.json
 Grok Bot 環境で回す。Mac は使わない。
 
 1. `plaud-inbox list-new --json`
-2. 各件: `plaud-inbox pull <id>` → `plaud-inbox transcribe <id>`
+2. 各件: `plaud-inbox pull <id>` → `plaud-inbox transcribe <id>`（SSH で asr-worker の投函箱へ音声を渡し、`result.json` を回収する）
 3. `plaud-inbox outline <id>` の `outline` から文章の種類を推定する
 4. `plaud-inbox templates --json` の `when` と照合し、テンプレ `id` を1つ選ぶ
 5. 資料本文（概要・決定・宿題など）を書き、`plaud-inbox notes <id> --text '...'` に渡す
@@ -35,7 +35,7 @@ Grok Bot 環境で回す。Mac は使わない。
 |---|---|
 | `list-new --json` | 未完了の端末録音 |
 | `pull [id...]` | MP3 取得 |
-| `transcribe [id...]` | ローカル Whisper（10分チャンク） |
+| `transcribe [id...]` | LAN 内 asr-worker へ SSH 投函し、完了まで status をポーリングして `result.json` を回収 |
 | `outline <id>` | 分類用の先頭テキスト |
 | `templates --json` | 選択可能なテンプレ |
 | `notes <id> --text` | Bot が書いた資料本文 |
@@ -51,6 +51,6 @@ id なしの `pull` / `transcribe` は未完了分を対象にする。
 ## 制約
 
 - 認証は `~/.plaud/tokens.json`（`npx @plaud-ai/cli login`）。切れたら login をやり直す
-- 起こしは `whisper-cli` + `~/.local/share/whisper/ggml-small.bin`。Plaud のクラウド文字起こしとテンプレ生成は呼ばない
+- 起こしは config のフラットな `asr_host` / `asr_engine` で指定する LAN 内 asr-worker の SSH 投函箱だけ。Plaud のクラウド文字起こし、ローカル Whisper の直叩き、テンプレ生成は呼ばない
 - メール宛先の既定は config の `email_to`。送信は sendmail / `mail` / SMTP（`PLAUD_SMTP_PASSWORD`）。Mail.app は Mac の残り
 - トークン・個人 config・パスワードをリポジトリに書かない
