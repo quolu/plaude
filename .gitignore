@@ -6,4 +6,5 @@ web/node_modules/
 web/dist/
 docker-compose.override.yml
 data/meetings/probe-*
+data/templates/probe-*
 .lattice/runs/

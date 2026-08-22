@@ -30,8 +30,34 @@ def main() -> int:
         meeting = json.loads(body)
         assert meeting["title"]
         assert meeting["duration"]
-        assert meeting["transcript"] and isinstance(meeting["transcript"][0]["t"], (int, float))
+        segs = meeting["transcript"]
+        assert segs and all(isinstance(s.get("t"), (int, float)) for s in segs)
+        assert segs[0]["t"] == 0
+        later = [s["t"] for s in segs if s["t"] > 0]
+        assert later, segs
         assert meeting["summary"] and "熱中症" in meeting["summary"]
+        st, body = fetch(f"{base}/api/templates")
+        tpls = json.loads(body)
+        assert any(t["id"] == "lecture" for t in tpls), tpls
+        put = urllib.request.Request(
+            f"{base}/api/templates/probe-crud",
+            data=json.dumps({
+                "title": "probe crud",
+                "when": "試験用",
+                "category": "一般",
+                "body": "# 見出し\n本文",
+            }).encode(),
+            method="PUT",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(put, timeout=5) as r:
+            saved = json.loads(r.read())
+        assert saved["id"] == "probe-crud"
+        assert "本文" in saved["body"]
+        st, body = fetch(f"{base}/api/templates/probe-crud")
+        got = json.loads(body)
+        assert got["title"] == "probe crud"
+        assert "本文" in got["body"]
         req = urllib.request.Request(
             f"{base}/api/publish",
             data=json.dumps({
