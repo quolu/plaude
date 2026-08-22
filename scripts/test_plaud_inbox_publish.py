@@ -61,6 +61,7 @@ def seed(root: Path, fid: str) -> Path:
             "duration_ms": 6000,
             "template": "meeting",
             "transcript": str(transcript),
+            "audio_url": "https://audio.example.test/recording.mp3",
         }}}),
         encoding="utf-8",
     )
@@ -90,6 +91,7 @@ def main() -> int:
                 {"t": 0, "speaker": "Speaker 1", "text": "一行目\n二行目"}
             ]
             assert payload["summary"] == "# 要約\n内容\n"
+            assert payload["audio_url"] == "https://audio.example.test/recording.mp3"
             complete = json.loads(state.read_text())["files"]["ok"]
             assert complete["published_at"] == complete["completed_at"]
 

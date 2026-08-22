@@ -6,6 +6,8 @@ import json
 import os
 import re
 import sys
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -151,6 +153,27 @@ def save_meeting(data: Path, mid: str, payload: dict) -> dict:
     return load_meeting(data, mid)
 
 
+def pull_audio(data: Path, mid: str, source_url: str) -> None:
+    parsed = urlparse(source_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("bad audio url")
+    folder = meeting_dir(data, mid)
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / "audio.mp3"
+    temporary = folder / ".audio.mp3.tmp"
+    try:
+        req = urllib.request.Request(source_url, headers={"User-Agent": "plaude-origin/1"})
+        with urllib.request.urlopen(req, timeout=300) as source, temporary.open("wb") as output:
+            while chunk := source.read(1024 * 1024):
+                output.write(chunk)
+        if temporary.stat().st_size == 0:
+            raise OSError("empty audio")
+        temporary.replace(target)
+    except (OSError, urllib.error.URLError):
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def make_handler(data: Path, static_dir: Path, skill_templates: Path, token: str):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -268,6 +291,16 @@ def make_handler(data: Path, static_dir: Path, skill_templates: Path, token: str
             if not mid:
                 self._json(400, {"error": "id required"})
                 return
+            audio_url = payload.get("audio_url")
+            if audio_url is not None:
+                if not isinstance(audio_url, str):
+                    self._json(400, {"error": "bad audio url"})
+                    return
+                try:
+                    pull_audio(data, mid, audio_url)
+                except (ValueError, OSError, urllib.error.URLError) as e:
+                    self._json(502, {"error": f"audio pull failed: {e}"})
+                    return
             saved = save_meeting(data, mid, payload)
             self._json(200, saved)
 
