@@ -1,0 +1,673 @@
+#!/usr/bin/env python3.12
+"""Plaud NotePin の音声を自前経路で扱う手足。種類推定とテンプレ選択は GrokBot が行う。"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+API_BASE = "https://platform.plaud.ai/developer/api"
+REFRESH_URL = f"{API_BASE}/oauth/third-party/access-token/refresh"
+UA = "plaud-cli/0.3.11"
+SKILL_DIR = Path(__file__).resolve().parent.parent
+EXAMPLE_CONFIG = SKILL_DIR / "config.example.json"
+DEFAULT_CONFIG = Path.home() / ".config/plaud-pipeline/config.json"
+TOKEN_PATH = Path.home() / ".plaud/tokens.json"
+
+
+def eprint(*a):
+    print(*a, file=sys.stderr)
+
+
+def expand(p: str) -> Path:
+    return Path(os.path.expanduser(p)).resolve()
+
+
+def load_config() -> dict:
+    if not DEFAULT_CONFIG.exists():
+        DEFAULT_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        DEFAULT_CONFIG.write_text(EXAMPLE_CONFIG.read_text(), encoding="utf-8")
+    cfg = json.loads(EXAMPLE_CONFIG.read_text())
+    cfg.update(json.loads(DEFAULT_CONFIG.read_text()))
+    return cfg
+
+
+def save_config(cfg: dict) -> None:
+    DEFAULT_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    DEFAULT_CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def data_dir(cfg: dict) -> Path:
+    d = expand(cfg["data_dir"])
+    for sub in ("audio", "chunks", "transcripts", "notes", "docs"):
+        (d / sub).mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def state_path(cfg: dict) -> Path:
+    return data_dir(cfg) / "state.json"
+
+
+def load_state(cfg: dict) -> dict:
+    p = state_path(cfg)
+    if not p.exists():
+        return {"files": {}}
+    return json.loads(p.read_text())
+
+
+def save_state(cfg: dict, state: dict) -> None:
+    state_path(cfg).write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def file_rec(state: dict, fid: str) -> dict:
+    rec = state.setdefault("files", {}).setdefault(fid, {})
+    return rec
+
+
+def load_tokens() -> dict:
+    if not TOKEN_PATH.exists():
+        raise SystemExit("Plaud CLI 未ログイン。npx @plaud-ai/cli login")
+    return json.loads(TOKEN_PATH.read_text())
+
+
+def save_tokens(tok: dict) -> None:
+    TOKEN_PATH.write_text(json.dumps(tok, indent=2) + "\n", encoding="utf-8")
+
+
+def access_token() -> str:
+    tok = load_tokens()
+    exp = tok.get("expires_at") or 0
+    if exp > 10_000_000_000:
+        exp = exp / 1000
+    if exp and time.time() > exp - 60:
+        tok = refresh_tokens(tok)
+    return tok["access_token"]
+
+
+def refresh_tokens(tok: dict) -> dict:
+    body = urllib.parse.urlencode({"refresh_token": tok["refresh_token"]}).encode()
+    req = urllib.request.Request(
+        REFRESH_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "User-Agent": UA,
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read())
+    nxt = {
+        "access_token": data["access_token"],
+        "refresh_token": data.get("refresh_token") or tok["refresh_token"],
+        "token_type": data.get("token_type") or "Bearer",
+        "expires_at": time.time() * 1000 + int(data.get("expires_in") or 3600) * 1000,
+    }
+    save_tokens(nxt)
+    return nxt
+
+
+def api_get(path: str) -> dict:
+    req = urllib.request.Request(
+        f"{API_BASE}{path}",
+        headers={
+            "Authorization": f"Bearer {access_token()}",
+            "Accept": "application/json",
+            "User-Agent": UA,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        if e.code != 401:
+            raise
+        tok = refresh_tokens(load_tokens())
+        req.add_header("Authorization", f"Bearer {tok['access_token']}")
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read())
+
+
+def list_all_files() -> list[dict]:
+    page = 1
+    out: list[dict] = []
+    while True:
+        payload = api_get(f"/open/third-party/files/?page={page}&page_size=20")
+        chunk = payload.get("data") or []
+        out.extend(chunk)
+        if len(chunk) < 20:
+            break
+        page += 1
+    return out
+
+
+def get_file(fid: str) -> dict:
+    return api_get(f"/open/third-party/files/{fid}")
+
+
+def is_device(cfg: dict, rec: dict) -> bool:
+    sn = rec.get("serial_number") or ""
+    return sn.startswith(cfg.get("device_sn_prefix") or "882")
+
+
+def completed(rec: dict) -> bool:
+    return bool(rec.get("completed_at"))
+
+
+def fmt_duration(ms) -> str:
+    if ms is None:
+        return ""
+    s = int(ms) // 1000
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m{sec:02d}s"
+    return f"{sec}s"
+
+
+def public_item(rec: dict) -> dict:
+    return {
+        "id": rec.get("id"),
+        "name": rec.get("name"),
+        "start_at": rec.get("start_at"),
+        "created_at": rec.get("created_at"),
+        "duration_ms": rec.get("duration"),
+        "duration": fmt_duration(rec.get("duration")),
+        "serial_number": rec.get("serial_number"),
+    }
+
+
+def cmd_list_new(cfg: dict, as_json: bool) -> int:
+    state = load_state(cfg)
+    items = []
+    for rec in list_all_files():
+        if not is_device(cfg, rec):
+            continue
+        st = state.get("files", {}).get(rec["id"], {})
+        if completed(st):
+            continue
+        row = public_item(rec)
+        row["pulled"] = bool(st.get("pulled_at"))
+        row["transcribed"] = bool(st.get("transcribed_at"))
+        row["rendered"] = bool(st.get("rendered_at"))
+        row["mailed"] = bool(st.get("mailed_at"))
+        items.append(row)
+    if as_json:
+        print(json.dumps(items, ensure_ascii=False, indent=2))
+        return 0
+    if not items:
+        print("新しい端末録音はない")
+        return 0
+    for it in items:
+        flags = ",".join(
+            k for k in ("pulled", "transcribed", "rendered", "mailed") if it[k]
+        ) or "new"
+        print(f"{it['id']}  {it['duration']:>8}  {flags:22}  {it['name']}")
+    return 0
+
+
+def download_url(url: str, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=300) as r, dest.open("wb") as f:
+        shutil.copyfileobj(r, f)
+
+
+def cmd_pull(cfg: dict, ids: list[str]) -> int:
+    if not cfg.get("steps", {}).get("download", True):
+        eprint("config.steps.download が false")
+        return 1
+    state = load_state(cfg)
+    if not ids:
+        ids = [r["id"] for r in list_all_files() if is_device(cfg, r) and not completed(file_rec(state, r["id"]))]
+    dd = data_dir(cfg)
+    for fid in ids:
+        meta = get_file(fid)
+        url = meta.get("presigned_url")
+        if not url:
+            eprint(f"{fid}: 音声 URL なし")
+            return 1
+        dest = dd / "audio" / f"{fid}.mp3"
+        download_url(url, dest)
+        rec = file_rec(state, fid)
+        rec.update(
+            {
+                "name": meta.get("name"),
+                "start_at": meta.get("start_at"),
+                "duration_ms": meta.get("duration"),
+                "serial_number": meta.get("serial_number"),
+                "pulled_at": datetime.now(timezone.utc).isoformat(),
+                "audio": str(dest),
+            }
+        )
+        save_state(cfg, state)
+        print(dest)
+    return 0
+
+
+def run(cmd: list[str]) -> None:
+    subprocess.run(cmd, check=True)
+
+
+def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
+    if not cfg.get("steps", {}).get("transcribe", True):
+        eprint("config.steps.transcribe が false")
+        return 1
+    state = load_state(cfg)
+    dd = data_dir(cfg)
+    bin_ = cfg["whisper_bin"]
+    model = str(expand(cfg["whisper_model"]))
+    ffmpeg = cfg["ffmpeg_bin"]
+    lang = cfg.get("whisper_language") or "ja"
+    chunk_s = int(cfg.get("chunk_seconds") or 600)
+    if not ids:
+        ids = [
+            fid
+            for fid, rec in state.get("files", {}).items()
+            if rec.get("pulled_at") and not rec.get("transcribed_at") and not completed(rec)
+        ]
+    for fid in ids:
+        rec = file_rec(state, fid)
+        src = Path(rec.get("audio") or dd / "audio" / f"{fid}.mp3")
+        if not src.exists():
+            eprint(f"{fid}: 先に pull")
+            return 1
+        chunk_dir = dd / "chunks" / fid
+        if chunk_dir.exists():
+            shutil.rmtree(chunk_dir)
+        chunk_dir.mkdir(parents=True)
+        run(
+            [
+                ffmpeg,
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(src),
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "segment",
+                "-segment_time",
+                str(chunk_s),
+                "-reset_timestamps",
+                "1",
+                str(chunk_dir / "c%03d.wav"),
+            ]
+        )
+        wavs = sorted(chunk_dir.glob("c*.wav"))
+        parts: list[str] = []
+        for wav in wavs:
+            stem = wav.with_suffix("")
+            run(
+                [
+                    bin_,
+                    "-m",
+                    model,
+                    "-l",
+                    lang,
+                    "-otxt",
+                    "-of",
+                    str(stem),
+                    "-f",
+                    str(wav),
+                ]
+            )
+            txt = Path(str(stem) + ".txt")
+            parts.append(txt.read_text(encoding="utf-8") if txt.exists() else "")
+        out = dd / "transcripts" / f"{fid}.txt"
+        out.write_text("\n".join(p.strip() for p in parts if p.strip()) + "\n", encoding="utf-8")
+        rec["transcribed_at"] = datetime.now(timezone.utc).isoformat()
+        rec["transcript"] = str(out)
+        save_state(cfg, state)
+        shutil.rmtree(chunk_dir, ignore_errors=True)
+        print(out)
+    return 0
+
+
+def parse_template(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    meta = {"id": path.stem, "title": path.stem, "when": "", "body": text}
+    if text.startswith("---"):
+        _, fm, body = text.split("---", 2)
+        meta["body"] = body.lstrip("\n")
+        for line in fm.splitlines():
+            if ":" not in line:
+                continue
+            k, v = line.split(":", 1)
+            meta[k.strip()] = v.strip()
+    meta["path"] = str(path)
+    return meta
+
+
+def templates() -> list[dict]:
+    return [parse_template(p) for p in sorted((SKILL_DIR / "templates").glob("*.md"))]
+
+
+def cmd_templates(as_json: bool) -> int:
+    rows = [{"id": t["id"], "title": t["title"], "when": t["when"]} for t in templates()]
+    if as_json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    for t in rows:
+        print(f"{t['id']:20}  {t['title']:10}  {t['when']}")
+    return 0
+
+
+def cmd_outline(cfg: dict, fid: str) -> int:
+    rec = load_state(cfg).get("files", {}).get(fid) or {}
+    path = Path(rec.get("transcript") or data_dir(cfg) / "transcripts" / f"{fid}.txt")
+    if not path.exists():
+        eprint(f"{fid}: 先に transcribe")
+        return 1
+    text = path.read_text(encoding="utf-8")
+    n = int(cfg.get("outline_chars") or 4000)
+    print(json.dumps(
+        {
+            "id": fid,
+            "name": rec.get("name"),
+            "start_at": rec.get("start_at"),
+            "duration": fmt_duration(rec.get("duration_ms")),
+            "chars": len(text),
+            "outline": text[:n],
+        },
+        ensure_ascii=False,
+        indent=2,
+    ))
+    return 0
+
+
+def fill(body: str, mapping: dict[str, str]) -> str:
+    for k, v in mapping.items():
+        body = body.replace("{{" + k + "}}", v or "")
+    return body
+
+
+def cmd_render(cfg: dict, fid: str, template_id: str, notes: str | None) -> int:
+    tpls = {t["id"]: t for t in templates()}
+    if template_id not in tpls:
+        eprint(f"不明なテンプレ: {template_id}")
+        return 1
+    state = load_state(cfg)
+    rec = file_rec(state, fid)
+    dd = data_dir(cfg)
+    tr_path = Path(rec.get("transcript") or dd / "transcripts" / f"{fid}.txt")
+    if not tr_path.exists():
+        eprint(f"{fid}: 先に transcribe")
+        return 1
+    notes_text = notes or ""
+    if not notes_text:
+        np = dd / "notes" / f"{fid}.md"
+        if np.exists():
+            notes_text = np.read_text(encoding="utf-8")
+    doc = fill(
+        tpls[template_id]["body"],
+        {
+            "title": rec.get("name") or fid,
+            "start_at": rec.get("start_at") or "",
+            "duration": fmt_duration(rec.get("duration_ms")),
+            "file_id": fid,
+            "template_id": template_id,
+            "notes": notes_text.strip() or "（未記入）",
+            "transcript": tr_path.read_text(encoding="utf-8").strip(),
+        },
+    )
+    out = dd / "docs" / f"{fid}.md"
+    out.write_text(doc, encoding="utf-8")
+    rec["template"] = template_id
+    rec["rendered_at"] = datetime.now(timezone.utc).isoformat()
+    rec["doc"] = str(out)
+    save_state(cfg, state)
+    print(out)
+    return 0
+
+
+def cmd_notes(cfg: dict, fid: str, text: str | None) -> int:
+    dd = data_dir(cfg)
+    path = dd / "notes" / f"{fid}.md"
+    if text is None:
+        if path.exists():
+            sys.stdout.write(path.read_text(encoding="utf-8"))
+            return 0
+        eprint(f"{fid}: notes なし")
+        return 1
+    path.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+    print(path)
+    return 0
+
+
+def applescript_mail(to: str, subject: str, body_path: Path, attach: Path | None) -> None:
+    args = ["osascript", "-", to, subject, str(body_path)]
+    if attach:
+        args.append(str(attach))
+    script = r"""
+on run argv
+  set theTo to item 1 of argv
+  set theSubject to item 2 of argv
+  set bodyFile to item 3 of argv
+  set bodyText to read (POSIX file bodyFile) as «class utf8»
+  tell application "Mail"
+    set msg to make new outgoing message with properties {subject:theSubject, content:bodyText, visible:false}
+    tell msg
+      make new to recipient at end of to recipients with properties {address:theTo}
+      if (count of argv) ≥ 4 then
+        set attachPath to POSIX file (item 4 of argv) as alias
+        make new attachment with properties {file name:attachPath} at after the last paragraph
+      end if
+      send
+    end tell
+  end tell
+end run
+"""
+    subprocess.run(args, input=script, text=True, check=True)
+
+
+def cmd_mail(cfg: dict, fid: str, to: str | None) -> int:
+    if not cfg.get("steps", {}).get("mail", True):
+        eprint("config.steps.mail が false")
+        return 1
+    state = load_state(cfg)
+    rec = file_rec(state, fid)
+    doc = Path(rec.get("doc") or data_dir(cfg) / "docs" / f"{fid}.md")
+    if not doc.exists():
+        eprint(f"{fid}: 先に render")
+        return 1
+    to_addr = to or cfg.get("email_to")
+    if not to_addr:
+        eprint("email_to が未設定")
+        return 1
+    attach = Path(rec.get("transcript") or data_dir(cfg) / "transcripts" / f"{fid}.txt")
+    subject = f"[Plaud] {rec.get('name') or fid}"
+    applescript_mail(to_addr, subject, doc, attach if attach.exists() else None)
+    rec["mailed_at"] = datetime.now(timezone.utc).isoformat()
+    rec["completed_at"] = rec["mailed_at"]
+    save_state(cfg, state)
+    print(f"sent {to_addr}")
+    return 0
+
+
+def cmd_done(cfg: dict, fid: str) -> int:
+    state = load_state(cfg)
+    rec = file_rec(state, fid)
+    rec["completed_at"] = datetime.now(timezone.utc).isoformat()
+    save_state(cfg, state)
+    print(fid)
+    return 0
+
+
+def cmd_status(cfg: dict, as_json: bool) -> int:
+    state = load_state(cfg)
+    rows = []
+    for fid, rec in state.get("files", {}).items():
+        rows.append(
+            {
+                "id": fid,
+                "name": rec.get("name"),
+                "pulled": bool(rec.get("pulled_at")),
+                "transcribed": bool(rec.get("transcribed_at")),
+                "template": rec.get("template"),
+                "rendered": bool(rec.get("rendered_at")),
+                "mailed": bool(rec.get("mailed_at")),
+                "completed": completed(rec),
+            }
+        )
+    if as_json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("状態なし")
+        return 0
+    for r in rows:
+        print(
+            f"{r['id']}  tmpl={r['template'] or '-':16}  "
+            f"{'done' if r['completed'] else 'open':4}  {r['name']}"
+        )
+    return 0
+
+
+def cmd_config(cfg: dict, key: str | None, value: str | None) -> int:
+    if key is None:
+        print(json.dumps(cfg, ensure_ascii=False, indent=2))
+        return 0
+    if value is None:
+        cur = cfg
+        for part in key.split("."):
+            cur = cur[part]
+        print(json.dumps(cur, ensure_ascii=False) if not isinstance(cur, str) else cur)
+        return 0
+    parts = key.split(".")
+    cur = cfg
+    for part in parts[:-1]:
+        if part not in cur or not isinstance(cur[part], dict):
+            cur[part] = {}
+        cur = cur[part]
+    if value.lower() in ("true", "false"):
+        parsed: object = value.lower() == "true"
+    else:
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = value
+    cur[parts[-1]] = parsed
+    save_config(cfg)
+    print(key, "=", parsed)
+    return 0
+
+
+def cmd_prepare(cfg: dict) -> int:
+    """新しい端末録音を pull + transcribe まで進める。分類以降は GrokBot。"""
+    state = load_state(cfg)
+    rc = cmd_list_new(cfg, as_json=True)
+    if rc:
+        return rc
+    # list-new already printed; do the work without reprinting the table
+    ids = []
+    for rec in list_all_files():
+        if not is_device(cfg, rec):
+            continue
+        st = file_rec(state, rec["id"])
+        if completed(st):
+            continue
+        ids.append(rec["id"])
+    if not ids:
+        return 0
+    rc = cmd_pull(cfg, ids)
+    if rc:
+        return rc
+    return cmd_transcribe(cfg, ids)
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(prog="plaud-inbox")
+    p.add_argument("--config", help="unused; config is ~/.config/plaud-pipeline/config.json")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("list-new")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("pull")
+    s.add_argument("ids", nargs="*")
+    s = sub.add_parser("transcribe")
+    s.add_argument("ids", nargs="*")
+    s = sub.add_parser("templates")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("outline")
+    s.add_argument("id")
+    s = sub.add_parser("notes")
+    s.add_argument("id")
+    s.add_argument("--text")
+    s = sub.add_parser("render")
+    s.add_argument("--id", required=True)
+    s.add_argument("--template", required=True)
+    s.add_argument("--notes")
+    s = sub.add_parser("mail")
+    s.add_argument("--id", required=True)
+    s.add_argument("--to")
+    s = sub.add_parser("done")
+    s.add_argument("id")
+    s = sub.add_parser("status")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("config")
+    s.add_argument("key", nargs="?")
+    s.add_argument("value", nargs="?")
+    sub.add_parser("prepare")
+
+    args = p.parse_args()
+    cfg = load_config()
+    data_dir(cfg)
+
+    if args.cmd == "list-new":
+        return cmd_list_new(cfg, args.json)
+    if args.cmd == "pull":
+        return cmd_pull(cfg, args.ids)
+    if args.cmd == "transcribe":
+        return cmd_transcribe(cfg, args.ids)
+    if args.cmd == "templates":
+        return cmd_templates(args.json)
+    if args.cmd == "outline":
+        return cmd_outline(cfg, args.id)
+    if args.cmd == "notes":
+        text = args.text
+        if text is None and not sys.stdin.isatty():
+            text = sys.stdin.read()
+        return cmd_notes(cfg, args.id, text)
+    if args.cmd == "render":
+        notes = args.notes
+        if notes is None and not sys.stdin.isatty():
+            notes = sys.stdin.read()
+        return cmd_render(cfg, args.id, args.template, notes)
+    if args.cmd == "mail":
+        return cmd_mail(cfg, args.id, args.to)
+    if args.cmd == "done":
+        return cmd_done(cfg, args.id)
+    if args.cmd == "status":
+        return cmd_status(cfg, args.json)
+    if args.cmd == "config":
+        return cmd_config(cfg, args.key, args.value)
+    if args.cmd == "prepare":
+        return cmd_prepare(cfg)
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except subprocess.CalledProcessError as e:
+        eprint("command failed", e)
+        raise SystemExit(1)
+    except urllib.error.HTTPError as e:
+        eprint("http", e.code, e.read()[:300])
+        raise SystemExit(1)

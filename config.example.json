@@ -1,0 +1,16 @@
+{
+  "email_to": "you@example.com",
+  "device_sn_prefix": "882",
+  "whisper_bin": "/opt/homebrew/bin/whisper-cli",
+  "whisper_model": "~/.local/share/whisper/ggml-small.bin",
+  "ffmpeg_bin": "/opt/homebrew/bin/ffmpeg",
+  "chunk_seconds": 600,
+  "outline_chars": 4000,
+  "whisper_language": "ja",
+  "data_dir": "~/.local/share/plaud-pipeline",
+  "steps": {
+    "download": true,
+    "transcribe": true,
+    "mail": true
+  }
+}
