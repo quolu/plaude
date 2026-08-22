@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import json
+import tempfile
 import threading
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import urllib.request
 from pathlib import Path
 
@@ -9,12 +11,28 @@ from server import serve
 ROOT = Path(__file__).resolve().parent.parent
 
 
+class QuietStaticHandler(SimpleHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        pass
+
+
+def audio_source():
+    tmp = tempfile.TemporaryDirectory()
+    audio = Path(tmp.name) / "recording.mp3"
+    audio.write_bytes(b"ID3" + b"test-audio" * 8)
+    handler = lambda *args, **kwargs: QuietStaticHandler(*args, directory=tmp.name, **kwargs)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return tmp, httpd, f"http://{httpd.server_address[0]}:{httpd.server_address[1]}/recording.mp3", audio.read_bytes()
+
+
 def fetch(url: str):
     with urllib.request.urlopen(url, timeout=5) as r:
         return r.status, r.headers, r.read()
 
 
 def main() -> int:
+    source_tmp, source_httpd, audio_url, expected_audio = audio_source()
     httpd = serve("127.0.0.1", 0, ROOT / "data")
     host, port = httpd.server_address[:2]
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -80,6 +98,7 @@ def main() -> int:
                 "duration": "6秒",
                 "transcript": [{"t": 0, "text": "hi"}],
                 "summary": "短い試験",
+                "audio_url": audio_url,
             }).encode(),
             method="POST",
             headers={"Content-Type": "application/json"},
@@ -87,6 +106,9 @@ def main() -> int:
         with urllib.request.urlopen(req, timeout=5) as r:
             published = json.loads(r.read())
         assert published["title"] == "probe"
+        assert published["has_audio"] is True
+        st, headers, body = fetch(f"{base}/m/probe-publish/audio")
+        assert st == 200 and headers.get_content_type() == "audio/mpeg" and body == expected_audio
         print("origin probes ok", meeting["title"])
         return 0
     finally:
@@ -100,6 +122,9 @@ def main() -> int:
                 import shutil
                 shutil.rmtree(leftover, ignore_errors=True)
         httpd.shutdown()
+        source_httpd.shutdown()
+        source_httpd.server_close()
+        source_tmp.cleanup()
 
 
 if __name__ == "__main__":

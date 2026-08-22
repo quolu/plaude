@@ -290,6 +290,7 @@ def cmd_pull(cfg: dict, ids: list[str]) -> int:
                 "serial_number": meta.get("serial_number"),
                 "pulled_at": datetime.now(timezone.utc).isoformat(),
                 "audio": str(dest),
+                "audio_url": url,
             }
         )
         save_state(cfg, state)
@@ -685,6 +686,16 @@ def cmd_publish(cfg: dict, fid: str) -> int:
         return 1
     notes_p = dd / "notes" / f"{fid}.md"
     summary = notes_p.read_text(encoding="utf-8") if notes_p.exists() else ""
+    audio_url = rec.get("audio_url")
+    if not audio_url:
+        try:
+            audio_url = get_file(fid).get("presigned_url")
+        except Exception as e:
+            eprint(f"{fid}: 音声 URL の取得に失敗: {e}")
+            return 1
+    if not audio_url:
+        eprint(f"{fid}: 音声 URL なし")
+        return 1
     payload = {
         "id": fid,
         "title": rec.get("name") or fid,
@@ -694,6 +705,7 @@ def cmd_publish(cfg: dict, fid: str) -> int:
         "template_id": rec.get("template"),
         "transcript": transcript_segments(tr_path.read_text(encoding="utf-8")),
         "summary": summary,
+        "audio_url": audio_url,
     }
     body = json.dumps(payload, ensure_ascii=False).encode()
     req = urllib.request.Request(
