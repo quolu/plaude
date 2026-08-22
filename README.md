@@ -25,7 +25,7 @@ npx --yes @plaud-ai/cli@0.3.11 login
 ## 入れ方
 
 ```sh
-git clone https://github.com/kitepon-rgb/plaud-pipeline.git
+git clone https://github.com/quolu/plaud-pipeline.git
 chmod +x plaud-pipeline/scripts/plaud-inbox
 ln -sfn "$(pwd)/plaud-pipeline/scripts/plaud-inbox" ~/.local/bin/plaud-inbox
 cp plaud-pipeline/config.example.json ~/.config/plaud-pipeline/config.json
@@ -43,7 +43,7 @@ ln -sfn "$(pwd)/plaud-pipeline" ~/.grok/skills/plaud-pipeline
 1時間おきのジョブに、次をそのまま載せる。
 
 ```
-https://github.com/kitepon-rgb/plaud-pipeline の SKILL.md に従え。
+https://github.com/quolu/plaud-pipeline の SKILL.md に従え。
 
 1時間おきに、この Mac で plaud-inbox を使う。
 手順は SKILL.md の「1時間おき」どおり。
