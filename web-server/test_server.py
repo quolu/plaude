@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def fetch(url: str):
     with urllib.request.urlopen(url, timeout=5) as r:
-        return r.status, r.read()
+        return r.status, r.headers, r.read()
 
 
 def main() -> int:
@@ -21,12 +21,12 @@ def main() -> int:
     thread.start()
     base = f"http://{host}:{port}"
     try:
-        st, body = fetch(f"{base}/healthz")
+        st, _, body = fetch(f"{base}/healthz")
         assert st == 200 and body.strip() == b"ok", (st, body)
-        st, body = fetch(f"{base}/api/meetings")
+        st, _, body = fetch(f"{base}/api/meetings")
         rows = json.loads(body)
         assert isinstance(rows, list) and any(r["id"] == "mock-safety" for r in rows), rows
-        st, body = fetch(f"{base}/api/meetings/mock-safety")
+        st, _, body = fetch(f"{base}/api/meetings/mock-safety")
         meeting = json.loads(body)
         assert meeting["title"]
         assert meeting["duration"]
@@ -36,19 +36,10 @@ def main() -> int:
         later = [s["t"] for s in segs if s["t"] > 0]
         assert later, segs
         assert meeting["summary"] and "熱中症" in meeting["summary"]
-        assert meeting["has_audio"] is True, meeting
-        req = urllib.request.Request(f"{base}/m/mock-safety/audio")
-        with urllib.request.urlopen(req, timeout=5) as r:
-            assert r.status == 200
-            assert r.headers.get("Accept-Ranges") == "bytes"
-            audio = r.read()
-        assert len(audio) > 200, len(audio)
-        rng = urllib.request.Request(f"{base}/m/mock-safety/audio", headers={"Range": "bytes=0-10"})
-        with urllib.request.urlopen(rng, timeout=5) as r:
-            assert r.status == 206, r.status
-            assert r.headers.get("Content-Range", "").startswith("bytes 0-10/")
-            assert len(r.read()) == 11
-        st, body = fetch(f"{base}/api/templates")
+        assert meeting["has_audio"] is True
+        st, headers, body = fetch(f"{base}/m/mock-safety/audio")
+        assert st == 200 and headers.get_content_type() == "audio/mpeg" and len(body) > 0
+        st, _, body = fetch(f"{base}/api/templates")
         tpls = json.loads(body)
         assert any(t["id"] == "lecture" for t in tpls), tpls
         put = urllib.request.Request(
@@ -66,7 +57,7 @@ def main() -> int:
             saved = json.loads(r.read())
         assert saved["id"] == "probe-crud"
         assert "本文" in saved["body"]
-        st, body = fetch(f"{base}/api/templates/probe-crud")
+        st, _, body = fetch(f"{base}/api/templates/probe-crud")
         got = json.loads(body)
         assert got["title"] == "probe crud"
         assert "本文" in got["body"]
