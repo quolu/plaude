@@ -12,7 +12,7 @@ plaud-inbox = ~/.grok/skills/plaud-pipeline/scripts/plaud-inbox
 config      = ~/.config/plaud-pipeline/config.json
 ```
 
-設定変更は `plaud-inbox config` と `plaud-inbox config <key> <value>`。`steps.download` / `steps.transcribe` / `steps.mail` で各段を止められる。メールは本線ではない（既定 `steps.mail=false`）。
+設定変更は `plaud-inbox config` と `plaud-inbox config <key> <value>`。`steps.download` / `steps.transcribe` / `steps.mail` で各段を止められる。メールは任意の残りで、既定の `steps.mail=false` のまま有効化しない。
 
 ## 1時間おき（GrokBot）
 
@@ -24,8 +24,8 @@ Grok Bot 環境で回す。Mac は使わない。
 4. `plaud-inbox templates --json` の `when` と照合し、テンプレ `id` を1つ選ぶ
 5. 資料本文（概要・決定・宿題など）を書き、`plaud-inbox notes <id> --text '...'` に渡す
 6. `plaud-inbox render --id <id> --template <template_id>`
-7. `plaud-inbox publish <id>`（`site_origin` へ meta / transcript / summary。音声は MS-A2 が Plaud から pull）
-8. 送れない・起こし失敗は `done` せず次週に残す。デモ音（シリアルが `882` 以外）は `list-new` に出ない。publish 成功時だけ completed になる
+7. `plaud-inbox publish <id>`（`site_origin` の `/api/publish` へ meta / transcript / summary を送る。音声は MS-A2 が Plaud から pull）
+8. `mail` は呼ばない。送れない・起こし失敗は `done` せず次週に残す。デモ音（シリアルが `882` 以外）は `list-new` に出ない。publish が成功した時だけ completed になる
 
 端末録音だけを対象にする。すでに `completed` の id は触らない。
 
@@ -40,7 +40,7 @@ Grok Bot 環境で回す。Mac は使わない。
 | `templates --json` | 選択可能なテンプレ |
 | `notes <id> --text` | Bot が書いた資料本文 |
 | `render --id --template` | テンプレ適用 |
-| `mail --id` | 任意の残り。本線ではない |
+| `mail --id` | 明示的に有効化した場合だけ使う任意の残り |
 | `publish <id>` | サイト API へ会議を載せる |
 | `done <id>` | 完了印（publish 成功時は自動。失敗時は付けない） |
 | `status --json` | 処理状態 |

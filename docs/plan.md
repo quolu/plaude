@@ -58,14 +58,17 @@ Plaud のロゴ・コピーライト・「公式サイト」は載せない。�
 
 ## データと公開
 
-`plaud-inbox` に足す:
+`plaud-inbox publish <id>` は `site_origin` の `/api/publish` へ会議の meta / transcript / summary を送る。origin は次の形で保存する。
 
-- `export <id>` … `data/meetings/<id>/meta.json` `transcript.json` `summary.json` `audio.mp3`
-- `publish <id>` … R2 へオブジェクトを上げ、Pages が読む索引 `index.json` を更新
+```
+DATA_DIR/
+  meetings/<id>/meta.json
+  meetings/<id>/transcript.json
+  meetings/<id>/summary.md または summary.json
+  meetings/<id>/audio.mp3
+```
 
-音声は git に入れない（5時間の MP3 がある）。R2 キーは会議 id。
-
-GrokBot 手順の末尾に `export` → `publish` を足す。メールは残してよい。ページが本命の閲覧面になる。
+音声は大きな POST にせず、MS-A2 の origin が Plaud から pull する。録音本文と本番音声は git に入れない。GrokBot の手順は render の次に publish を実行し、publish 成功時だけ completed とする。メールは本線から外し、既定 `steps.mail=false` の任意機能にする。
 
 ---
 
@@ -74,21 +77,14 @@ GrokBot 手順の末尾に `export` → `publish` を足す。メールは残し
 `Developer/plaude` 内:
 
 ```
-web/          # 静的フロント（一覧・会議ページ）
-scripts/plaud-inbox  # export / publish を追加
+web/                  # Vite + 素の TS の一覧・会議ページ
+web-server/           # API と静的配信を担う origin
+scripts/plaud-inbox   # pull / transcribe / render / publish
 ```
 
 フロントは Vite + 素の TS。YuiHome の TanStack テンプレは使わない（別ホスト・別責務）。
 
-デプロイ:
-
-1. Cloudflare Pages: `plaud.kitepon.dev` → `web/` のビルド
-2. R2 バケット `plaud-meetings`（audio + JSON）
-3. Pages Functions か `_worker` で `/m/:id/audio` と JSON を R2 から出す
-4. DNS: `plaud.kitepon.dev` CNAME → Pages。既存の `*.kitepon.dev` と同じ Cloudflare
-5. Access: 自分の Gmail のみ（`afk.kitepon.dev` と同じ方針）
-
-Access の設定と DNS は Cloudflare 側の操作。リポジトリ側は wrangler 設定まで用意する。ゾーン操作がこの環境からできないなら、CNAME と Access の中身だけ手順として残す。
+デプロイ経路は Cloudflare Access → Tunnel `home-server` → Caddy → MS-A2 の Docker origin (`plaud-web`, LAN `192.168.1.2:18880`) とする。公開 URL は `https://plaud.kitepon.dev` だけで、Access は `kitepon@gmail.com` のみを通す。Cloudflare Pages と R2 は使わない。
 
 ---
 
@@ -114,8 +110,8 @@ Access の設定と DNS は Cloudflare 側の操作。リポジトリ側は wran
 
 ## 作業順
 
-1. `summary.json` / `transcript.json` の型と `export`
+1. `summary.json` / `transcript.json` の型とモック会議データ
 2. `web/` の2タブページ（モック1件で面を先に合わせる）
-3. R2 publish + Pages 配線
-4. GrokBot 用に SKILL.md を更新（要約 JSON の書き方 + publish）
-5. `plaud.kitepon.dev` の DNS / Access
+3. `plaud-inbox publish` で origin API へメタデータ・文字起こし・要約を載せる
+4. GrokBot 用に SKILL.md を更新し、メールを本線から外す
+5. MS-A2 origin と Tunnel / Caddy / Access を配線する
