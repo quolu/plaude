@@ -77,6 +77,15 @@ def main() -> int:
         print("origin probes ok", meeting["title"])
         return 0
     finally:
+        for leftover in (
+            ROOT / "data" / "templates" / "probe-crud.md",
+            ROOT / "data" / "meetings" / "probe-publish",
+        ):
+            if leftover.is_file():
+                leftover.unlink()
+            elif leftover.is_dir():
+                import shutil
+                shutil.rmtree(leftover, ignore_errors=True)
         httpd.shutdown()
 
 

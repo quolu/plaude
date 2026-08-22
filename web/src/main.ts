@@ -19,6 +19,8 @@ type Template = {
   body: string;
 };
 
+import { bindTranscriptSeek } from "./seek";
+
 const app = document.getElementById("app")!;
 
 function fmtTime(t: number): string {
@@ -103,12 +105,7 @@ async function renderMeeting(id: string, tab: string) {
     });
   });
   const player = document.getElementById("player") as HTMLAudioElement | null;
-  app.querySelectorAll(".seg").forEach((el) => {
-    el.addEventListener("click", () => {
-      const t = Number((el as HTMLElement).dataset.t || 0);
-      if (player) player.currentTime = t;
-    });
-  });
+  bindTranscriptSeek(app, player);
 }
 
 async function renderTemplates(editId?: string) {
