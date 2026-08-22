@@ -1,0 +1,50 @@
+{
+  "schema": "lattice.todo_witness_draft.v2",
+  "project_id": "plaude",
+  "plan_key": "site-msa2",
+  "capacity": {"executors": 2},
+  "tasks": {
+    "t1": {
+      "owns": [
+        {"path": "web-server", "creates": true},
+        {"path": "data", "creates": true}
+      ],
+      "reads": []
+    },
+    "t2": {
+      "owns": [
+        {"path": "web", "creates": true}
+      ],
+      "reads": ["web-server"]
+    },
+    "t3": {
+      "owns": [
+        "templates"
+      ],
+      "reads": []
+    },
+    "t4": {
+      "owns": [
+        "scripts/plaud-inbox",
+        "SKILL.md",
+        "config.example.json",
+        "docs/plan.md"
+      ],
+      "reads": ["web-server"]
+    },
+    "t5": {
+      "owns": [
+        {"path": "deploy", "creates": true},
+        {"path": "Dockerfile", "creates": true},
+        {"path": "docker-compose.yml", "creates": true}
+      ],
+      "reads": ["web", "web-server", "docs/plan.md"]
+    },
+    "t6": {
+      "owns": [
+        {"path": "evidence/site-msa2", "creates": true}
+      ],
+      "reads": ["deploy", "web", "web-server", "scripts/plaud-inbox"]
+    }
+  }
+}

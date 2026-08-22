@@ -1,0 +1,10 @@
+{
+  "schema": "lattice.project_identity.v1",
+  "project_id": "plaude",
+  "display_name": "plaude",
+  "external_pane": {
+    "title": "円卓",
+    "url": "https://peertable.kitepon.dev/plaude",
+    "probe_url": "https://peertable.kitepon.dev/api/plaude/members"
+  }
+}
