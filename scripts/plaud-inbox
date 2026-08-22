@@ -712,6 +712,9 @@ def cmd_publish(cfg: dict, fid: str) -> int:
     except urllib.error.HTTPError as e:
         eprint(f"publish 失敗: {e.code} {e.read().decode(errors='replace')}")
         return 1
+    except urllib.error.URLError as e:
+        eprint(f"publish 失敗: {e.reason}")
+        return 1
     rec["published_at"] = datetime.now(timezone.utc).isoformat()
     rec["completed_at"] = rec["published_at"]
     save_state(cfg, state)
