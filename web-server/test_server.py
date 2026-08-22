@@ -36,6 +36,18 @@ def main() -> int:
         later = [s["t"] for s in segs if s["t"] > 0]
         assert later, segs
         assert meeting["summary"] and "熱中症" in meeting["summary"]
+        assert meeting["has_audio"] is True, meeting
+        req = urllib.request.Request(f"{base}/m/mock-safety/audio")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            assert r.status == 200
+            assert r.headers.get("Accept-Ranges") == "bytes"
+            audio = r.read()
+        assert len(audio) > 200, len(audio)
+        rng = urllib.request.Request(f"{base}/m/mock-safety/audio", headers={"Range": "bytes=0-10"})
+        with urllib.request.urlopen(rng, timeout=5) as r:
+            assert r.status == 206, r.status
+            assert r.headers.get("Content-Range", "").startswith("bytes 0-10/")
+            assert len(r.read()) == 11
         st, body = fetch(f"{base}/api/templates")
         tpls = json.loads(body)
         assert any(t["id"] == "lecture" for t in tpls), tpls

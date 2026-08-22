@@ -20,6 +20,7 @@ type Template = {
 };
 
 import { bindTranscriptSeek } from "./seek";
+import { newTemplateFields } from "./template-create";
 
 const app = document.getElementById("app")!;
 
@@ -142,6 +143,12 @@ async function renderTemplates(editId?: string) {
   }
   const cats = [...new Set(rows.map((r) => r.category || "一般"))];
   app.innerHTML = `<div class="app">${rail("templates")}<main class="main"><h2>テンプレート</h2>
+    <form id="create-template">
+      <input id="new-id" name="id" placeholder="id" required />
+      <input id="new-title" name="title" placeholder="名前" />
+      <input id="new-when" name="when" placeholder="いつ使うか" />
+      <button id="create" type="submit">作成</button>
+    </form>
     ${cats
       .map(
         (c) =>
@@ -155,6 +162,23 @@ async function renderTemplates(editId?: string) {
       )
       .join("")}
   </main></div>`;
+  document.getElementById("create-template")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fields = newTemplateFields(
+      (document.getElementById("new-id") as HTMLInputElement).value,
+      (document.getElementById("new-title") as HTMLInputElement).value,
+      (document.getElementById("new-when") as HTMLInputElement).value,
+      "",
+    );
+    const res = await fetch(`/api/templates/${fields.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fields),
+    });
+    if (!res.ok) throw new Error(`create ${res.status}`);
+    history.pushState({}, "", `/templates/${fields.id}`);
+    void route();
+  });
 }
 
 async function route() {
