@@ -1,4 +1,4 @@
-# plaud-pipeline
+# plaude
 
 Plaud NotePin S の録音を、Plaud の文字起こし分数を使わずに取り込む。
 
@@ -45,18 +45,18 @@ brew install whisper-cpp ffmpeg
 ## 入れ方
 
 ```sh
-git clone https://github.com/quolu/plaud-pipeline.git
-chmod +x plaud-pipeline/scripts/plaud-inbox
-ln -sfn "$(pwd)/plaud-pipeline/scripts/plaud-inbox" ~/.local/bin/plaud-inbox
+git clone https://github.com/quolu/plaude.git
+chmod +x plaude/scripts/plaud-inbox
+ln -sfn "$(pwd)/plaude/scripts/plaud-inbox" ~/.local/bin/plaud-inbox
 mkdir -p ~/.config/plaud-pipeline
-cp plaud-pipeline/config.example.json ~/.config/plaud-pipeline/config.json
+cp plaude/config.example.json ~/.config/plaud-pipeline/config.json
 # email_to を自分の宛先に直す
 ```
 
 Grok / Claude から skill として読むなら:
 
 ```sh
-ln -sfn "$(pwd)/plaud-pipeline" ~/.grok/skills/plaud-pipeline
+ln -sfn "$(pwd)/plaude" ~/.grok/skills/plaud-pipeline
 ```
 
 ## GrokBot に渡す文
@@ -64,7 +64,7 @@ ln -sfn "$(pwd)/plaud-pipeline" ~/.grok/skills/plaud-pipeline
 1時間おきのジョブに、次をそのまま載せる。ジョブは Grok Bot 環境で回す。
 
 ```
-https://github.com/quolu/plaud-pipeline の SKILL.md に従え。
+https://github.com/quolu/plaude の SKILL.md に従え。
 
 1時間おきに、Grok Bot 環境で plaud-inbox を使う。
 手順は SKILL.md の「1時間おき」どおり。Mac や Mail.app は不要。
