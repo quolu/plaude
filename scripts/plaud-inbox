@@ -842,12 +842,16 @@ def main() -> int:
     if args.cmd == "notes":
         text = args.text
         if text is None and not sys.stdin.isatty():
-            text = sys.stdin.read()
+            incoming = sys.stdin.read()
+            if incoming:
+                text = incoming
         return cmd_notes(cfg, args.id, text)
     if args.cmd == "render":
         notes = args.notes
         if notes is None and not sys.stdin.isatty():
-            notes = sys.stdin.read()
+            incoming = sys.stdin.read()
+            if incoming:
+                notes = incoming
         return cmd_render(cfg, args.id, args.template, notes)
     if args.cmd == "mail":
         return cmd_mail(cfg, args.id, args.to)
