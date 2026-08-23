@@ -6,6 +6,8 @@ Plaud NotePin S の録音を、Plaud の文字起こし分数を使わずに取�
 
 正本の手順は [SKILL.md](SKILL.md)。ランタイムは Linux（Grok Bot 環境）を第一とする。Mac / Mail.app は任意の残り。
 
+閲覧面は Access 内の `https://plaud.kitepon.dev` だけ。会議ページから文字起こしの平文（`/m/<id>/transcript.txt`）と要約 Markdown（`/m/<id>/summary.md`）をダウンロードできる。origin の出し方は [deploy/README.md](deploy/README.md)。
+
 ## 必要なもの
 
 - Linux（Grok Bot 環境）。macOS でも動くが必須ではない

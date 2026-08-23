@@ -171,6 +171,10 @@ async function renderMeeting(id: string, tab: string) {
     `<div class="hero">
       <p class="eyebrow">${esc((m.started_at || "").replace("T", " "))} · ${esc(m.duration || "")}</p>
       <h2>${esc(m.title)}</h2>
+      <p class="downloads">
+        <a class="dl" href="/m/${esc(id)}/transcript.txt" download="${esc(id)}-transcript.txt">文字起こしをダウンロード</a>
+        <a class="dl" href="/m/${esc(id)}/summary.md" download="${esc(id)}-summary.md">要約をダウンロード</a>
+      </p>
     </div>
     <div class="player-wrap">${playerMarkup(id, phases, m.has_audio)}</div>
     <div class="tabs">
@@ -334,6 +338,7 @@ document.addEventListener("click", (e) => {
   if (!a || a.target || a.origin !== location.origin) return;
   const href = a.getAttribute("href") || "";
   if (href.startsWith("#")) return;
+  if (a.hasAttribute("download")) return;
   if (a.hasAttribute("data-jump")) return;
   e.preventDefault();
   history.pushState({}, "", a.href);

@@ -67,6 +67,18 @@ def main() -> int:
             assert r.headers["Accept-Ranges"] == "bytes"
             assert r.headers["Content-Range"].startswith("bytes 0-31/")
             assert len(r.read()) == 32
+        st, headers, body = fetch(f"{base}/m/mock-safety/transcript.txt")
+        text = body.decode("utf-8")
+        assert st == 200 and "text/plain" in headers.get_content_type()
+        assert 'filename="mock-safety-transcript.txt"' in (headers["Content-Disposition"] or "")
+        assert "[00:00 Speaker 1]" in text
+        assert "熱中症" in text
+        assert "## " in text
+        st, headers, body = fetch(f"{base}/m/mock-safety/summary.md")
+        summary = body.decode("utf-8")
+        assert st == 200 and "markdown" in headers.get_content_type()
+        assert 'filename="mock-safety-summary.md"' in (headers["Content-Disposition"] or "")
+        assert "熱中症" in summary
         st, _, body = fetch(f"{base}/api/templates")
         tpls = json.loads(body)
         assert any(t["id"] == "lecture-summary" for t in tpls), [t["id"] for t in tpls]

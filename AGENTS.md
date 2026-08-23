@@ -19,10 +19,12 @@ Plaud NotePin S の端末録音を、Plaud のクラウド文字起こし分数�
 | パス | 中身 |
 |---|---|
 | `/` | 会議一覧 |
-| `/m/<id>` | プレイヤー + 文字起こし（フェーズ見出しで章分け）/ 要約 |
+| `/m/<id>` | プレイヤー + 文字起こし（フェーズ見出しで章分け）/ 要約。タイトル下から文字起こしと要約をダウンロードできる |
 | `/m/<id>?p=<n>` | フェーズ n へ直リンク（音声も該当時刻へ移動する） |
 | `/templates` | テンプレ一覧・作成・編集 |
 | `/m/<id>/audio` | 同一オリジンの MP3（Range / 206 でシーク可能） |
+| `/m/<id>/transcript.txt` | 文字起こしの平文（話者交代に `[MM:SS Speaker N]`）。添付名 `{id}-transcript.txt` |
+| `/m/<id>/summary.md` | 要約 Markdown。添付名 `{id}-summary.md` |
 
 Access は `afk.kitepon.dev` と同じく `kitepon@gmail.com` だけ。Access なしで中身を出さない。全世界公開にしない。
 

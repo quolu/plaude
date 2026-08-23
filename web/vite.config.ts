@@ -12,7 +12,7 @@ export default defineConfig({
         target: "http://127.0.0.1:18880",
         bypass(req) {
           const url = req.url || "";
-          if (/^\/m\/[^/]+\/audio(?:\?|$)/.test(url)) return;
+          if (/^\/m\/[^/]+\/(audio|transcript\.txt|summary\.md)(?:\?|$)/.test(url)) return;
           return "/index.html";
         },
       },

@@ -28,7 +28,7 @@ Grok Bot 環境で回す。Mac は使わない。
    - **人名の漢字**: 音声からは読みしか確定しない。表記を確認できない人名は役職＋姓（例: 斉藤部長）に留め、漢字のフルネームを推定して書かない
    - **重大事実**: 死亡・重傷・列車衝突などの重大災害は要約から絶対に落とさない。圧縮しても死傷の有無と結果は残す
 7. `plaud-inbox summarize --id <id> --template <template_id> --json '{"節名": "本文", ...}'`（節をすべて埋める。1つでも欠けると失敗する）
-8. `plaud-inbox publish <id>`（`site_origin` の `/api/publish` へ meta / transcript / summary を送る。音声は MS-A2 が Plaud から pull）
+8. `plaud-inbox publish <id>`（`site_origin` の `/api/publish` へ meta / transcript / summary を送る。音声は MS-A2 が Plaud から pull）。載った会議は `https://plaud.kitepon.dev/m/<id>` から文字起こし平文と要約 Markdown をダウンロードできる
 9. `mail` は呼ばない。送れない・起こし失敗は `done` せず次週に残す。デモ音（シリアルが `882` 以外）は `list-new` に出ない。publish が成功した時だけ completed になる
 
 端末録音だけを対象にする。すでに `completed` の id は触らない。

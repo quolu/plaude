@@ -56,6 +56,70 @@ def load_meeting(data: Path, mid: str) -> dict | None:
     }
 
 
+def fmt_clock(t: float) -> str:
+    s = max(0, int(t))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h:02d}:{m:02d}:{sec:02d}"
+    return f"{m:02d}:{sec:02d}"
+
+
+def _emit_segments(lines: list[str], segs: list[dict]) -> None:
+    last = None
+    for s in segs:
+        speaker = (s.get("speaker") or "").strip()
+        t = s.get("t") or 0
+        if speaker and speaker != last:
+            lines.append(f"[{fmt_clock(t)} {speaker}]")
+            last = speaker
+        elif not speaker:
+            lines.append(f"[{fmt_clock(t)}]")
+            last = None
+        text = (s.get("text") or "").rstrip()
+        if text:
+            lines.append(text)
+
+
+def transcript_text(meeting: dict) -> str:
+    segs = meeting.get("transcript") or []
+    phases = meeting.get("phases") or []
+    lines = [str(meeting.get("title") or meeting.get("id") or "")]
+    meta = " · ".join(
+        x for x in [(meeting.get("started_at") or "").replace("T", " "), meeting.get("duration") or ""] if x
+    )
+    if meta:
+        lines.append(meta)
+    lines.append("")
+    if phases:
+        for i, phase in enumerate(phases):
+            end = phases[i + 1]["t"] if i + 1 < len(phases) else float("inf")
+            start = phase.get("t") or 0
+            lines.append(f"## {phase.get('title') or ''}".rstrip())
+            body = [s for s in segs if start <= (s.get("t") or 0) < end]
+            _emit_segments(lines, body)
+            if i + 1 < len(phases):
+                lines.append("")
+    else:
+        _emit_segments(lines, segs)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def summary_text(meeting: dict) -> str:
+    title = str(meeting.get("title") or meeting.get("id") or "")
+    body = (meeting.get("summary") or "").strip()
+    meta = " · ".join(
+        x for x in [(meeting.get("started_at") or "").replace("T", " "), meeting.get("duration") or ""] if x
+    )
+    parts = [title]
+    if meta:
+        parts.append(meta)
+    parts.append("")
+    if body:
+        parts.append(body)
+    return "\n".join(parts).rstrip() + "\n"
+
+
 def list_meetings(data: Path) -> list[dict]:
     root = data / "meetings"
     if not root.is_dir():
@@ -220,6 +284,23 @@ def make_handler(data: Path, static_dir: Path, skill_templates: Path, token: str
                     self._json(404, {"error": "not found"})
                     return
                 self._json(200, meeting)
+                return
+            m = re.fullmatch(r"/m/([^/]+)/(transcript\.txt|summary\.md)", path)
+            if m:
+                meeting = load_meeting(data, m.group(1))
+                if not meeting:
+                    self._json(404, {"error": "not found"})
+                    return
+                name = m.group(2)
+                body = transcript_text(meeting) if name == "transcript.txt" else summary_text(meeting)
+                ctype = "text/plain; charset=utf-8" if name.endswith(".txt") else "text/markdown; charset=utf-8"
+                filename = f"{meeting['id']}-{name}"
+                self._send(
+                    200,
+                    body.encode("utf-8"),
+                    ctype,
+                    {"Content-Disposition": f'attachment; filename="{filename}"'},
+                )
                 return
             m = re.fullmatch(r"/m/([^/]+)/audio", path)
             if m:

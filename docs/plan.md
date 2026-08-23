@@ -1,5 +1,7 @@
 # plaud.kitepon.dev — 会議ごとの文字起こし／要約ページ
 
+**R2 / Cloudflare Pages / メール本線は撤回済み。** 現行の正本は [AGENTS.md](../AGENTS.md) と [deploy/README.md](../deploy/README.md)。本書のホスト案は残すが、それに従わない。
+
 この計画の正本は **Developer/plaude**。YuiHome では作業しない。GitHub は [quolu/plaude](https://github.com/quolu/plaude)。
 
 GrokBot の取り込み結果を、公式 Plaud 共有ページと同じ情報面で出す。
@@ -27,8 +29,12 @@ Plaud のロゴ・コピーライト・「公式サイト」は載せない。�
 | パス | 中身 |
 |---|---|
 | `/` | 会議一覧（日時・長さ・タイトル）。Access 内 |
-| `/m/<id>` | プレイヤー + タブ。`?tab=transcript` / `?tab=summary` |
-| `/m/<id>/audio` | MP3（同一オリジン、プレイヤー用） |
+| `/m/<id>` | プレイヤー + 文字起こし / 要約。タイトル下からダウンロード |
+| `/m/<id>?p=<n>` | フェーズ n へ直リンク（音声も該当時刻へ移動する） |
+| `/templates` | テンプレ一覧・作成・編集 |
+| `/m/<id>/audio` | MP3（同一オリジン、プレイヤー用。Range / 206） |
+| `/m/<id>/transcript.txt` | 文字起こしの平文（話者交代に `[MM:SS Speaker N]`）。添付名 `{id}-transcript.txt` |
+| `/m/<id>/summary.md` | 要約 Markdown。添付名 `{id}-summary.md` |
 
 要約タブの本文スキーマ（GrokBot が `notes` の代わりに JSON で書く）:
 

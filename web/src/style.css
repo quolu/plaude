@@ -133,6 +133,17 @@ h3.cat { font-size: 13px; letter-spacing: 0.12em; color: var(--orange); margin: 
 
 .hero { margin-bottom: 12px; }
 .hero h2 { font-size: 26px; margin: 6px 0 0; }
+.downloads { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 0; }
+.dl {
+  display: inline-block;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--orange-soft);
+  letter-spacing: 0.04em;
+}
+.dl:hover { border-color: var(--line-strong); color: var(--white); }
 
 .tabs {
   display: flex; gap: 18px;
