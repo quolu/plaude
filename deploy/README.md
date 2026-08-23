@@ -28,8 +28,8 @@ ssh kite@192.168.1.2 'cd ~/plaude && docker compose up -d --build'
 
 ```bash
 ssh kite@192.168.1.2 'curl -s http://127.0.0.1:18880/healthz'
-ssh kite@192.168.1.2 'curl -sI http://127.0.0.1:18880/m/<id>/transcript.txt'   # attachment; filename="<id>-transcript.txt"
-ssh kite@192.168.1.2 'curl -sI http://127.0.0.1:18880/m/<id>/summary.md'       # attachment; filename="<id>-summary.md"
+ssh kite@192.168.1.2 'curl -sD - -o /dev/null http://127.0.0.1:18880/m/<id>/transcript.txt'   # attachment; filename="<id>-transcript.txt"
+ssh kite@192.168.1.2 'curl -sD - -o /dev/null http://127.0.0.1:18880/m/<id>/summary.md'       # attachment; filename="<id>-summary.md"
 ssh kite@192.168.1.2 'docker run --rm --entrypoint sh plaude-web:latest -c "ls /app"'   # data が無いこと
 ```
 
