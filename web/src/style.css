@@ -43,3 +43,6 @@ audio { width: 100%; margin: 8px 0 16px; }
   font-size: 15px; cursor: pointer; }
 .phase-head time { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 400; }
 .toc a time { display: inline-block; width: 62px; font-variant-numeric: tabular-nums; }
+
+.seg.turn { margin-top: 14px; }
+.who { display: block; font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 2px; }

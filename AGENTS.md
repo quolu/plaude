@@ -26,7 +26,7 @@ Plaud NotePin S の端末録音を、Plaud のクラウド文字起こし分数�
 
 Access は `afk.kitepon.dev` と同じく `kitepon@gmail.com` だけ。Access なしで中身を出さない。全世界公開にしない。
 
-文字起こしは `{ "t": 秒, "speaker": "...", "text": "..." }`。v1 は時刻付き1話者でページを出す。話者分離は次段。
+文字起こしは `{ "t": 秒, "speaker": "Speaker N", "text": "..." }`。話者が変わった行にだけラベルを出す（1252 行に同じ名前を並べない）。章をまたぐ時は先頭で出し直す。
 
 ## ホスト
 
@@ -53,6 +53,9 @@ templates/<id>.md
 
 手足は `scripts/plaud-inbox`。種類推定とテンプレ選択はエージェントが行う。
 
+- 受け取る result.json は **`asr-worker.result.v2` だけ**。v1 は拒否して転写エラーにする（黙って受けない）
+- 平文 transcript（`transcripts/<id>.txt`）は話者交代の位置に `[MM:SS Speaker N]` を挟む。outline / phases / summarize を書く側が「誰がいつ話したか」を読めるようにするため
+- **publish の音声 URL は毎回取り直す。** Plaud の presigned URL は期限切れになるため、state に貯めた URL を使い回さない
 - 起こしは LAN 内 `asr-worker` の SSH 投函箱（`asr_host` / `asr_engine`）だけ。Plaud クラウドの文字起こし、ローカル Whisper の直叩き、テンプレ生成は呼ばない
 - メールは本線ではない。既定は `steps.mail=false`
 - `publish` は `site_origin` へ meta / transcript / summary / summary_struct / phases を載せる。音声は origin 側が Plaud から pull する

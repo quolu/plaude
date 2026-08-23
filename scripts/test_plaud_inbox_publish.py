@@ -21,6 +21,22 @@ class PublishHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    audio_url_calls = 0
+
+    def do_GET(self):
+        # 偽 Plaud API: publish のたびに新しい presigned URL を返す
+        assert self.path.startswith("/open/third-party/files/")
+        PublishHandler.audio_url_calls += 1
+        body = json.dumps({
+            "id": self.path.rsplit("/", 1)[-1],
+            "presigned_url": f"https://audio.example.test/recording.mp3?sig={PublishHandler.audio_url_calls}",
+        }).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         assert self.path == "/api/publish"
         size = int(self.headers["Content-Length"])
@@ -33,11 +49,15 @@ class PublishHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+PLAUD_API_BASE = ""
+
+
 def run_publish(config: Path, fid: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(INBOX), "--config", str(config), "publish", fid],
         text=True,
         capture_output=True,
+        env={**os.environ, "PLAUD_API_BASE": PLAUD_API_BASE},
         check=False,
     )
 
@@ -147,6 +167,7 @@ def main() -> int:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     origin = f"http://{server.server_address[0]}:{server.server_address[1]}"
+    globals()["PLAUD_API_BASE"] = origin
     try:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -195,7 +216,9 @@ def main() -> int:
             assert payload["summary_struct"]["template_id"] == "meeting-minutes"
             assert payload["summary_struct"]["sections"]["宿題"].startswith("- ベル")
             assert payload["phases"] == [{"t": 0, "title": "導入"}, {"t": 3, "title": "本題"}]
-            assert payload["audio_url"] == "https://audio.example.test/recording.mp3"
+            # 期限切れを避けるため、publish は state のキャッシュを使わず毎回取り直す
+            assert payload["audio_url"].startswith("https://audio.example.test/recording.mp3?sig=")
+            assert PublishHandler.audio_url_calls >= 1
             complete = json.loads(state.read_text())["files"]["ok"]
             assert complete["published_at"] == complete["completed_at"]
 
@@ -205,7 +228,7 @@ def main() -> int:
             ]
             json_state = seed(root, "json")
             result_path = root / "data" / "transcripts" / "json.json"
-            result_path.write_text(json.dumps({"schema": "asr-worker.result.v1", "segments": segments}), encoding="utf-8")
+            result_path.write_text(json.dumps({"schema": "asr-worker.result.v2", "segments": segments}), encoding="utf-8")
             json_data = json.loads(json_state.read_text())
             json_data["files"]["json"]["transcript_json"] = str(result_path)
             json_state.write_text(json.dumps(json_data), encoding="utf-8")
@@ -242,9 +265,14 @@ def main() -> int:
                 "PATH": f"{bindir}:{os.environ['PATH']}",
                 "FAKE_LOG": str(log),
                 "FAKE_RESULT": json.dumps({
-                    "schema": "asr-worker.result.v1",
+                    "schema": "asr-worker.result.v2",
                     "engine": "parakeet",
-                    "segments": segments,
+                    "diarizer": "pyannote",
+                    "speakers": ["Speaker 1", "Speaker 2"],
+                    "segments": [
+                        {"t": 12.34, "speaker": "Speaker 1", "text": "時刻付き"},
+                        {"t": 56.78, "speaker": "Speaker 2", "text": "透過する"},
+                    ],
                 }),
             }
             result = run_transcribe(worker_config, "worker-ok", worker_env)
@@ -253,7 +281,12 @@ def main() -> int:
             assert worker["engine"] == "parakeet"
             assert worker["transcribed_at"]
             assert Path(worker["transcript_json"]).exists()
-            assert Path(worker["transcript"]).read_text(encoding="utf-8") == "時刻付き\n透過する\n"
+            # 話者が変わった所にだけラベルが入り、要約側が誰の発言か読める
+            assert Path(worker["transcript"]).read_text(encoding="utf-8") == (
+                "[00:12 Speaker 1]\n時刻付き\n[00:56 Speaker 2]\n透過する\n"
+            )
+            assert worker["speakers"] == ["Speaker 1", "Speaker 2"]
+            assert worker["diarizer"] == "pyannote"
             calls = log.read_text(encoding="utf-8")
             assert "~/asr/inbox/worker-ok/audio.mp3" in calls
             assert "submit worker-ok --engine parakeet" in calls
@@ -267,6 +300,15 @@ def main() -> int:
             failed_worker = json.loads(failed_worker_state.read_text())["files"]["worker-failed"]
             assert "transcribed_at" not in failed_worker
             assert failed_worker["transcribe_error"]["code"] == "TRANSCRIBE_WORKER_FAILED"
+
+            # 旧契約（v1）の result.json は受け取らない
+            legacy_state = seed_audio(worker_root, "worker-legacy")
+            result = run_transcribe(worker_config, "worker-legacy", worker_env | {
+                "FAKE_RESULT": json.dumps({"schema": "asr-worker.result.v1", "engine": "parakeet", "segments": segments}),
+            })
+            assert result.returncode == 1
+            legacy = json.loads(legacy_state.read_text())["files"]["worker-legacy"]
+            assert legacy["transcribe_error"]["code"] == "TRANSCRIBE_WORKER_INVALID_RESULT"
 
             unreachable_worker_state = seed_audio(worker_root, "worker-unreachable")
             result = run_transcribe(worker_config, "worker-unreachable", worker_env | {"FAKE_SSH_UNREACHABLE": "1"})

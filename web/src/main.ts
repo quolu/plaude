@@ -86,13 +86,21 @@ async function renderMeeting(id: string, tab: string) {
     : "";
   const segs = m.transcript || [];
   const phases = m.phases || [];
-  const seg = (s: Segment) =>
-    `<div class="seg" data-t="${s.t}"><time>${fmtTime(s.t)}</time><div>${s.text}</div></div>`;
+  // 話者が変わった行にだけラベルを出す。1252 行に同じ名前を並べても読めない。
+  let lastSpeaker: string | null = null;
+  const seg = (s: Segment) => {
+    const speaker = s.speaker || "";
+    const changed = speaker && speaker !== lastSpeaker;
+    lastSpeaker = speaker || lastSpeaker;
+    const tag = changed ? `<span class="who">${speaker}</span>` : "";
+    return `<div class="seg${changed ? " turn" : ""}" data-t="${s.t}"><time>${fmtTime(s.t)}</time><div>${tag}${s.text}</div></div>`;
+  };
   let transcript: string;
   if (phases.length) {
     transcript = phases
       .map((p, i) => {
         const end = i + 1 < phases.length ? phases[i + 1].t : Infinity;
+        lastSpeaker = null;
         const body = segs.filter((s) => s.t >= p.t && s.t < end).map(seg).join("");
         return `<section class="phase" id="p-${i}"><h3 class="phase-head" data-t="${p.t}"><time>${fmtTime(p.t)}</time>${p.title}</h3>${body}</section>`;
       })

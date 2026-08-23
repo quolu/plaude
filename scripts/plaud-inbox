@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 
-API_BASE = "https://platform.plaud.ai/developer/api"
+API_BASE = os.environ.get("PLAUD_API_BASE") or "https://platform.plaud.ai/developer/api"
 REFRESH_URL = f"{API_BASE}/oauth/third-party/access-token/refresh"
 UA = "plaud-cli/0.3.11"
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -352,8 +352,8 @@ def worker_result_segments(path: Path) -> tuple[dict, list[dict]]:
     except (OSError, json.JSONDecodeError) as e:
         raise WorkerTranscribeError("TRANSCRIBE_WORKER_INVALID_RESULT", "result.json を読めない") from e
     segments = result.get("segments") if isinstance(result, dict) else None
-    if not isinstance(result, dict) or result.get("schema") != "asr-worker.result.v1" or not isinstance(segments, list):
-        raise WorkerTranscribeError("TRANSCRIBE_WORKER_INVALID_RESULT", "result.json が asr-worker.result.v1 ではない")
+    if not isinstance(result, dict) or result.get("schema") != "asr-worker.result.v2" or not isinstance(segments, list):
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_INVALID_RESULT", "result.json が asr-worker.result.v2 ではない")
     if not all(isinstance(segment, dict) for segment in segments):
         raise WorkerTranscribeError("TRANSCRIBE_WORKER_INVALID_RESULT", "result.json の segments が不正")
     return result, segments
@@ -368,6 +368,23 @@ def mark_transcribe_error(cfg: dict, state: dict, fid: str, rec: dict, error: Wo
     save_state(cfg, state)
     eprint(f"{fid}: {error.code}: {error.detail}")
     return 1
+
+
+def transcript_text(segments: list[dict]) -> str:
+    """話者が変わった所だけ `[MM:SS Speaker N]` を挟んだ平文にする。
+
+    outline / summarize / phases を書く側が「誰がいつ話したか」を読めるようにする。
+    """
+    lines: list[str] = []
+    current = None
+    for segment in segments:
+        speaker = str(segment.get("speaker") or "")
+        if speaker and speaker != current:
+            seconds = int(float(segment.get("t") or 0))
+            lines.append(f"[{seconds // 60:02d}:{seconds % 60:02d} {speaker}]")
+            current = speaker
+        lines.append(str(segment.get("text") or ""))
+    return "\n".join(lines) + "\n"
 
 
 def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
@@ -412,12 +429,14 @@ def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
         except WorkerTranscribeError as e:
             return mark_transcribe_error(cfg, state, fid, rec, e)
         out = dd / "transcripts" / f"{fid}.txt"
-        out.write_text("\n".join(str(segment.get("text") or "") for segment in segments) + "\n", encoding="utf-8")
+        out.write_text(transcript_text(segments), encoding="utf-8")
         rec.update({
             "transcribed_at": datetime.now(timezone.utc).isoformat(),
             "transcript": str(out),
             "transcript_json": str(result_path),
             "engine": result.get("engine") or engine,
+            "diarizer": result.get("diarizer"),
+            "speakers": result.get("speakers") or [],
         })
         rec.pop("transcribe_error", None)
         save_state(cfg, state)
@@ -836,13 +855,12 @@ def cmd_publish(cfg: dict, fid: str) -> int:
         eprint(f"{fid}: 先に phases（フェーズ分けが要る）")
         return 1
     phases = json.loads(phases_p.read_text(encoding="utf-8"))
-    audio_url = rec.get("audio_url")
-    if not audio_url:
-        try:
-            audio_url = get_file(fid).get("presigned_url")
-        except Exception as e:
-            eprint(f"{fid}: 音声 URL の取得に失敗: {e}")
-            return 1
+    # presigned URL は期限切れになる。state に貯めた古い URL を使い回さず、毎回取り直す。
+    try:
+        audio_url = get_file(fid).get("presigned_url")
+    except Exception as e:
+        eprint(f"{fid}: 音声 URL の取得に失敗: {e}")
+        return 1
     if not audio_url:
         eprint(f"{fid}: 音声 URL なし")
         return 1
