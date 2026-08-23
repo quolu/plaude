@@ -38,8 +38,8 @@ export function shell(active: string, main: string, meeting = false): string {
   const railNav = NAV.map((n) => item(n.href, n.label, n.key)).join("");
   const dock = NAV.map((n) => item(n.href, n.label, n.key, "dock-item ")).join("");
   return `<a class="skip-link" href="#main">本文へ</a>
+  ${constellations()}
   <div class="app${meeting ? " app-meeting" : ""}">
-    ${constellations()}
     <aside class="rail">
       <a class="brand" href="/">
         <img src="/brand/kitepon-dev-on-night.png" alt="kitepon.dev" width="160" height="48" />

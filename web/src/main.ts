@@ -172,6 +172,7 @@ async function renderMeeting(id: string, tab: string) {
       <p class="eyebrow">${esc((m.started_at || "").replace("T", " "))} · ${esc(m.duration || "")}</p>
       <h2>${esc(m.title)}</h2>
     </div>
+    <div class="player-wrap">${playerMarkup(id, phases, m.has_audio)}</div>
     <div class="tabs">
       <button type="button" data-tab="transcript" class="${tab === "transcript" ? "on" : ""}">文字起こし</button>
       <button type="button" data-tab="summary" class="${tab === "summary" ? "on" : ""}">要約</button>
@@ -180,8 +181,7 @@ async function renderMeeting(id: string, tab: string) {
       <div id="pane">${pane}</div>
       <aside class="toc" data-toc>${tocBody || `<p class="muted">目次はない</p>`}</aside>
     </div>
-    <button type="button" class="toc-open" data-toc-open>目次</button>
-    <div class="player-wrap">${playerMarkup(id, phases, m.has_audio)}</div>`,
+    <button type="button" class="toc-open" data-toc-open>目次</button>`,
     true,
   );
   app.querySelectorAll("[data-tab]").forEach((btn) => {
