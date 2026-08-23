@@ -78,9 +78,11 @@ https://github.com/quolu/plaude の SKILL.md に従え。
 - Plaud のクラウド文字起こしは使わない。起こしは LAN 内 asr-worker（config の asr_host=fox-wsl、
   asr_engine=whisper）だけ。ローカル whisper の直叩きへフォールバックしない
 - asr-worker へ届かない・status が返らない時は転写を保留する。別経路で代替しない
-- 宛先は ~/.config/plaud-pipeline/config.json の email_to
+- メールは呼ばない（既定 steps.mail=false のまま）
+- 固有名詞の誤変換に気づいたら SKILL.md「固有名詞の登録」どおり、その場で登録する
 - 失敗した id は done しない
 - 端末録音（シリアル 882 始まり）だけを対象にする
+- 手順は更新されることがある。ジョブの開始時に git pull で最新の SKILL.md を読む
 ```
 
 コマンドの実体:
