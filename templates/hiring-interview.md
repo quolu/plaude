@@ -1,16 +1,24 @@
 ---
 id: hiring-interview
 title: 採用面接
-when: 候補者の経験、強み、希望、懸念点を一貫した観点で確認する。
-category: 調査
-source: 本文は自作。テンプレ名と用途は Plaud Template Community を参考
-source_url: https://support.plaud.ai/hc/en-us/articles/50636094914841-Custom-summary-templates
-author: plaude
+when: 採用担当向け。強み・懸念・Q&Aと実行項目、期待や給与の要点を整理する。
+category: インタビュー
+source: Plaud Template Community（web.plaud.ai・2026-08-23 取得）
+author: Plaud
 ---
 # {{title}}
 
-## 経験と具体例
-> 候補者が語った経験を、具体的な事実（規模・役割・期間）で箇条書き。
+## 候補者の概要
+> 経験（各社でのキャリア概要と辞めた理由）、仕事に対する期待、可能なら勤務可能日と給与希望。
 
-## 評価メモ
-> 強み・懸念・次の選考段階を箇条書き。印象語でなく発言の根拠を添える。
+## 強み
+> 面接官の観察と候補者の主張を分けて書く。
+
+## 懸念点
+> 面接官の観察と候補者のデメリット、リスク評価。
+
+## 質疑応答
+> 面接官の質問と候補者の回答、候補者からの質問と面接官の回答を Q&A で。
+
+## 実行リスト
+> 具体的なフォローアップ項目を列挙する。

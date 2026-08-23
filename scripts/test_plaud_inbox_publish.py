@@ -86,7 +86,7 @@ def run_phases(config: Path, fid: str, payload: str) -> subprocess.CompletedProc
     )
 
 
-SECTIONS = '{"概要": "要約の概要", "決定事項": "- 決めた", "宿題": "- ベル: 追う / 8-30"}'
+SECTIONS = '{"議題ごとの整理": "議題1の要約", "決定事項": "- 決めた", "タスク": "- ベル: 追う / 8-30", "注意点": "- なし", "保留事項": "- なし"}'
 PHASES = '[{"t": 0, "title": "導入"}, {"t": 3, "title": "本題"}]'
 
 
@@ -183,7 +183,7 @@ def main() -> int:
             assert "summarize" in blocked.stderr
 
             # 節が足りない要約は受け付けない
-            partial = run_summarize(config, "ok", "meeting-minutes", '{"概要": "だけ"}')
+            partial = run_summarize(config, "ok", "meeting-minutes", '{"議題ごとの整理": "だけ"}')
             assert partial.returncode == 1
             assert "決定事項" in partial.stderr
 
@@ -211,10 +211,11 @@ def main() -> int:
                 {"t": 0, "speaker": "Speaker 1", "text": "一行目\n二行目"}
             ]
             assert "## 決定事項" in payload["summary"]
+            assert "## タスク" in payload["summary"]
             assert "- 決めた" in payload["summary"]
             assert "文字起こし" not in payload["summary"]
             assert payload["summary_struct"]["template_id"] == "meeting-minutes"
-            assert payload["summary_struct"]["sections"]["宿題"].startswith("- ベル")
+            assert payload["summary_struct"]["sections"]["タスク"].startswith("- ベル")
             assert payload["phases"] == [{"t": 0, "title": "導入"}, {"t": 3, "title": "本題"}]
             # 期限切れを避けるため、publish は state のキャッシュを使わず毎回取り直す
             assert payload["audio_url"].startswith("https://audio.example.test/recording.mp3?sig=")

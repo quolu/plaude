@@ -21,7 +21,7 @@ Grok Bot 環境で回す。Mac は使わない。
 1. `plaud-inbox list-new --json`
 2. 各件: `plaud-inbox pull <id>` → `plaud-inbox transcribe <id>`（SSH で asr-worker の投函箱へ音声を渡し、`result.json` を回収する）
 3. `plaud-inbox outline <id>` の `outline` から文章の種類を推定する
-4. `plaud-inbox templates --json` の `when` と照合し、テンプレ `id` を1つ選ぶ。同じ JSON の `sections` が、そのテンプレで**書かなければならない節**と各節の記入指示
+4. `plaud-inbox templates --json` の `when` と照合し、テンプレ `id` を1つ選ぶ。同じ JSON の `sections` が、そのテンプレで**書かなければならない節**と各節の記入指示。テンプレは Plaud 公式（web.plaud.ai のテンプレコミュニティ）由来の16種
 5. `plaud-inbox phases --id <id> --json '[{"t": 0, "title": "開会挨拶"}, ...]'`（会議をフェーズへ分ける。`t` は元音声の絶対秒で、`result.json` の `segments` の時刻から取る）
 6. `plaud-inbox summarize --id <id> --template <template_id> --json '{"節名": "本文", ...}'`（節をすべて埋める。1つでも欠けると失敗する）
 7. `plaud-inbox publish <id>`（`site_origin` の `/api/publish` へ meta / transcript / summary を送る。音声は MS-A2 が Plaud から pull）

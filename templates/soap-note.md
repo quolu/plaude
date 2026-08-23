@@ -1,22 +1,24 @@
 ---
 id: soap-note
 title: SOAP記録
-when: 医療・支援の面談を主観情報、客観情報、評価、計画で整理する。
-category: 専門職
-source: 本文は自作。テンプレ名と用途は Plaud Template Community を参考
-source_url: https://support.plaud.ai/hc/en-us/articles/50636094914841-Custom-summary-templates
-author: plaude
+when: 医療向けの診療記録テンプレート。症状や所見、評価、方針をSOAPで簡潔に記録する。
+category: 医療
+source: Plaud Template Community（web.plaud.ai・2026-08-23 取得）
+author: Plaud
 ---
 # {{title}}
 
-## S: 主観情報
-> 本人が語った訴え・経過をそのまま箇条書き。
+## 診断履歴
+> 既往症（過去の診断や病状の要約）と薬歴。
 
-## O: 客観情報
-> 観察された事実・数値を箇条書き。
+## 主観的所見
+> 患者の報告した症状や懸念を記述。症状は簡潔に詳述する。
 
-## A: 評価
-> S と O から導いた評価を書く。推測は推測と明記する。
+## 客観的所見
+> 主な身体検査結果や検査データ、関連する診断的観察を記録する。
 
-## P: 計画
-> 次に行うこと・確認事項・次回を箇条書き。
+## 評価
+> 発見に基づき現在の診断を要約する。鑑別診断があれば書く。
+
+## 対策
+> 処方された薬剤や治療法、推奨されるフォローアップや検査、長期的な治療戦略を記述する。

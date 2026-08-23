@@ -69,7 +69,7 @@ def main() -> int:
             assert len(r.read()) == 32
         st, _, body = fetch(f"{base}/api/templates")
         tpls = json.loads(body)
-        assert any(t["id"] == "lecture" for t in tpls), tpls
+        assert any(t["id"] == "lecture-summary" for t in tpls), [t["id"] for t in tpls]
         put = urllib.request.Request(
             f"{base}/api/templates/probe-crud",
             data=json.dumps({
