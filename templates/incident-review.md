@@ -3,9 +3,9 @@ id: incident-review
 title: インシデントレビュー
 when: 障害・事故の影響、時系列、原因、再発防止を整理する。
 category: 報告
-source: Plaud Template Community
+source: 本文は自作。テンプレ名と用途は Plaud Template Community を参考
 source_url: https://support.plaud.ai/hc/en-us/articles/50636094914841-Custom-summary-templates
-author: Plaud Community
+author: plaude
 ---
 # {{title}}
 

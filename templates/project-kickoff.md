@@ -3,9 +3,9 @@ id: project-kickoff
 title: プロジェクト・キックオフ
 when: 新しい案件の目的、範囲、担当、最初の期限を揃える会議。
 category: ビジネス
-source: Plaud Template Community
+source: 本文は自作。テンプレ名と用途は Plaud Template Community を参考
 source_url: https://support.plaud.ai/hc/en-us/articles/50636094914841-Custom-summary-templates
-author: Plaud Community
+author: plaude
 ---
 # {{title}}
 

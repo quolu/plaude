@@ -3,9 +3,9 @@ id: sales-discovery
 title: 商談ヒアリング
 when: 顧客の課題、現状、意思決定者、導入時期を掘り下げる商談。
 category: 営業
-source: Plaud Template Community
+source: 本文は自作。テンプレ名と用途は Plaud Template Community を参考
 source_url: https://support.plaud.ai/hc/en-us/articles/50636094914841-Custom-summary-templates
-author: Plaud Community
+author: plaude
 ---
 # {{title}}
 

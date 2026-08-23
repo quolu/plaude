@@ -3,9 +3,9 @@ id: deal-handoff
 title: 受注引き継ぎ
 when: 営業から導入・運用チームへ顧客背景と約束を引き継ぐ。
 category: 営業
-source: Plaud Template Community
+source: 本文は自作。テンプレ名と用途は Plaud Template Community を参考
 source_url: https://support.plaud.ai/hc/en-us/articles/50636094914841-Custom-summary-templates
-author: Plaud Community
+author: plaude
 ---
 # {{title}}
 

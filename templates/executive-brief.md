@@ -3,9 +3,9 @@ id: executive-brief
 title: エグゼクティブ要約
 when: 経営層へ結論、判断材料、リスク、必要な意思決定を短く報告する。
 category: 報告
-source: Plaud Template Community
+source: 本文は自作。テンプレ名と用途は Plaud Template Community を参考
 source_url: https://support.plaud.ai/hc/en-us/articles/50636094914841-Custom-summary-templates
-author: Plaud Community
+author: plaude
 ---
 # {{title}}
 

@@ -3,9 +3,9 @@ id: training-session
 title: 研修セッション
 when: 研修で学んだこと、演習、質問、現場での実践を整理する。
 category: 教育
-source: Plaud Template Community
+source: 本文は自作。テンプレ名と用途は Plaud Template Community を参考
 source_url: https://support.plaud.ai/hc/en-us/articles/50636094914841-Custom-summary-templates
-author: Plaud Community
+author: plaude
 ---
 # {{title}}
 

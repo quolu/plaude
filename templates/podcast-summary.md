@@ -3,9 +3,9 @@ id: podcast-summary
 title: ポッドキャスト要約
 when: 番組や対談のテーマ、印象的な発言、紹介された情報をまとめる。
 category: コンテンツ
-source: Plaud Template Community
+source: 本文は自作。テンプレ名と用途は Plaud Template Community を参考
 source_url: https://support.plaud.ai/hc/en-us/articles/50636094914841-Custom-summary-templates
-author: Plaud Community
+author: plaude
 ---
 # {{title}}
 

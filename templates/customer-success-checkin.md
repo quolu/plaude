@@ -3,9 +3,9 @@ id: customer-success-checkin
 title: カスタマーサクセス定例
 when: 導入後の活用状況、成果、リスク、支援計画を確認する定例。
 category: 営業
-source: Plaud Template Community
+source: 本文は自作。テンプレ名と用途は Plaud Template Community を参考
 source_url: https://support.plaud.ai/hc/en-us/articles/50636094914841-Custom-summary-templates
-author: Plaud Community
+author: plaude
 ---
 # {{title}}
 

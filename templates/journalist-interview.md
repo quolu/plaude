@@ -3,9 +3,9 @@ id: journalist-interview
 title: 取材記事インタビュー
 when: 記事・番組のために背景、事実、引用候補を聞き取る取材。
 category: 調査
-source: Plaud Template Community
+source: 本文は自作。テンプレ名と用途は Plaud Template Community を参考
 source_url: https://support.plaud.ai/hc/en-us/articles/50636094914841-Custom-summary-templates
-author: Plaud Community
+author: plaude
 ---
 # {{title}}
 
