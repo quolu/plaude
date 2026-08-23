@@ -86,7 +86,8 @@ def run_phases(config: Path, fid: str, payload: str) -> subprocess.CompletedProc
     )
 
 
-SECTIONS = '{"議題ごとの整理": "議題1の要約", "決定事項": "- 決めた", "タスク": "- ベル: 追う / 8-30", "注意点": "- なし", "保留事項": "- なし"}'
+# meeting-minutes は指示型（節なし）テンプレ: 本文1キーで一括
+SECTIONS = '{"本文": "## 決定事項\\n- 決めた\\n## タスク\\n- ベル: 追う / 8-30"}'
 PHASES = '[{"t": 0, "title": "導入"}, {"t": 3, "title": "本題"}]'
 
 
@@ -182,10 +183,14 @@ def main() -> int:
             assert blocked.returncode == 1, blocked.stdout
             assert "summarize" in blocked.stderr
 
-            # 節が足りない要約は受け付けない
-            partial = run_summarize(config, "ok", "meeting-minutes", '{"議題ごとの整理": "だけ"}')
+            # 骨組み型テンプレは節が足りない要約を受け付けない
+            partial = run_summarize(config, "ok", "meeting-notes", '{"📝 会議ノート": "だけ"}')
             assert partial.returncode == 1
-            assert "決定事項" in partial.stderr
+            assert "次の手配" in partial.stderr
+            # 指示型テンプレは 本文 以外のキーを受け付けない
+            wrongkey = run_summarize(config, "ok", "meeting-minutes", '{"概要": "x"}')
+            assert wrongkey.returncode == 1
+            assert "本文" in wrongkey.stderr
 
             r = run_summarize(config, "ok", "meeting-minutes", SECTIONS)
             assert r.returncode == 0, r.stderr
@@ -211,11 +216,11 @@ def main() -> int:
                 {"t": 0, "speaker": "Speaker 1", "text": "一行目\n二行目"}
             ]
             assert "## 決定事項" in payload["summary"]
-            assert "## タスク" in payload["summary"]
+            assert "- ベル: 追う / 8-30" in payload["summary"]
             assert "- 決めた" in payload["summary"]
             assert "文字起こし" not in payload["summary"]
             assert payload["summary_struct"]["template_id"] == "meeting-minutes"
-            assert payload["summary_struct"]["sections"]["タスク"].startswith("- ベル")
+            assert "本文" in payload["summary_struct"]["sections"]
             assert payload["phases"] == [{"t": 0, "title": "導入"}, {"t": 3, "title": "本題"}]
             # 期限切れを避けるため、publish は state のキャッシュを使わず毎回取り直す
             assert payload["audio_url"].startswith("https://audio.example.test/recording.mp3?sig=")

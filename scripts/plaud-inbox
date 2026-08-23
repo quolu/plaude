@@ -445,14 +445,19 @@ def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
 
 
 def parse_sections(body: str) -> list[dict]:
-    """`## 見出し` を節、直下の `>` 行を記入指示として読む。"""
+    """`## 見出し` を節、次の `## ` までの本文（逐語）をその節の記入指示として読む。
+
+    テンプレ本文は取得元の文面をそのまま保持する。節見出しが1つも無い
+    テンプレは「指示型」であり、要約は「本文」1キーで一括して受ける。
+    """
     sections: list[dict] = []
     for line in body.splitlines():
         if line.startswith("## "):
-            sections.append({"key": line[3:].strip(), "ask": ""})
-        elif line.startswith(">") and sections:
-            ask = line.lstrip(">").strip()
-            sections[-1]["ask"] = (sections[-1]["ask"] + " " + ask).strip()
+            sections.append({"key": line[3:].strip(), "ask": []})
+        elif sections:
+            sections[-1]["ask"].append(line)
+    for section in sections:
+        section["ask"] = "\n".join(section["ask"]).strip()
     return sections
 
 
@@ -523,9 +528,13 @@ def render_doc(tpl: dict, rec: dict, fid: str, filled: dict[str, str]) -> str:
         f"- テンプレ: {tpl['title']}（{tpl['id']}）",
         "",
     ]
-    for sec in tpl["sections"]:
-        head.append(f"## {sec['key']}")
-        head.append(filled[sec["key"]].strip())
+    if tpl["sections"]:
+        for sec in tpl["sections"]:
+            head.append(f"## {sec['key']}")
+            head.append(filled[sec["key"]].strip())
+            head.append("")
+    else:
+        head.append(filled["本文"].strip())
         head.append("")
     return "\n".join(head).rstrip() + "\n"
 
@@ -536,9 +545,6 @@ def cmd_summarize(cfg: dict, fid: str, template_id: str, payload: str | None, pa
         eprint(f"不明なテンプレ: {template_id}（plaud-inbox templates --json で確認）")
         return 1
     tpl = tpls[template_id]
-    if not tpl["sections"]:
-        eprint(f"{template_id}: 節が定義されていないテンプレ")
-        return 1
     raw = payload
     if path:
         raw = Path(expand(path)).read_text(encoding="utf-8")
@@ -553,7 +559,7 @@ def cmd_summarize(cfg: dict, fid: str, template_id: str, payload: str | None, pa
     if not isinstance(given, dict):
         eprint("節名をキーにした JSON オブジェクトで渡す")
         return 1
-    want = [sec["key"] for sec in tpl["sections"]]
+    want = [sec["key"] for sec in tpl["sections"]] or ["本文"]
     missing = [k for k in want if not str(given.get(k) or "").strip()]
     unknown = [k for k in given if k not in want]
     if missing or unknown:
