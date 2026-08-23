@@ -91,6 +91,27 @@ https://github.com/quolu/plaude の SKILL.md に従え。
 
 または `PATH` が通っていれば `plaud-inbox`。
 
+## テンプレの取り込み（plaud-templates MCP）
+
+Plaud のテンプレコミュニティからテンプレを抜き出す MCP を同梱している（`mcp/plaud_templates_mcp.py`・
+標準ライブラリのみ・`.mcp.json` で登録済み）。公式の開発者 API と公式 MCP はテンプレ取得を持たない
+（2026-08-23 調査）ため、Web アプリの内部 API を使う。
+
+| ツール | 返すもの |
+|---|---|
+| `plaud_template_categories` | カテゴリ一覧（id・名前・件数） |
+| `plaud_official_templates` | Plaud 公式テンプレの骨組み（`pre_markdown` 原文） |
+| `plaud_community_templates` | コミュニティテンプレの一覧（ページ指定） |
+| `plaud_community_template_get` | 1件の原文（`content`・原語のまま） |
+
+認証: web.plaud.ai へログインした状態で、開発者ツールの Network から任意の
+api-apne1.plaud.ai リクエストの `Authorization` ヘッダ（`Bearer ...`）をコピーし、
+`~/.config/plaud-templates/token` へ保存する（chmod 600）。**トークンは約1日で失効する**。
+失効時はツールがその旨をエラーで返すので、同じ手順で貼り替える。
+
+取り込んだテンプレは `templates/` の形式（frontmatter + 本文逐語）で保存し、
+frontmatter に取得元・取得日・原作者を必ず書く。
+
 ## 入れないもの
 
 録音データ、文字起こし本文、`~/.plaud/tokens.json`、個人の `config.json`、SMTP パスワードはリポジトリに置かない。
