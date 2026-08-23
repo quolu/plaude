@@ -46,3 +46,8 @@ audio { width: 100%; margin: 8px 0 16px; }
 
 .seg.turn { margin-top: 14px; }
 .who { display: block; font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 2px; }
+
+#pane li.ind-1 { margin-left: 20px; }
+#pane li.ind-2 { margin-left: 40px; }
+#pane li.ind-3 { margin-left: 60px; }
+#pane blockquote { margin: 4px 0 4px 20px; padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }

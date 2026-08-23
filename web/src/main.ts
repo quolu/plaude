@@ -65,15 +65,25 @@ function headings(md: string): { id: string; text: string }[] {
     .map((l, i) => ({ id: `h-${i}`, text: l.replace(/^##+ /, "") }));
 }
 
+function inlineMd(text: string): string {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
 function renderMd(md: string): string {
   return md
     .split("\n")
-    .map((line) => {
-      if (line.startsWith("# ")) return `<h2>${line.slice(2)}</h2>`;
-      if (line.startsWith("## ")) return `<h3>${line.slice(3)}</h3>`;
-      if (line.startsWith("- ")) return `<li>${line.slice(2)}</li>`;
-      if (/^\d+\. /.test(line)) return `<li>${line.replace(/^\d+\. /, "")}</li>`;
-      return line ? `<p>${line}</p>` : "";
+    .map((raw) => {
+      const line = raw.replace(/^\s+/, "");
+      const depth = Math.min(3, Math.floor((raw.length - line.length) / 2));
+      if (line.startsWith("# ")) return `<h2>${inlineMd(line.slice(2))}</h2>`;
+      if (line.startsWith("## ")) return `<h3>${inlineMd(line.slice(3))}</h3>`;
+      if (line.startsWith("- [ ] ")) return `<li class="ind-${depth}">☐ ${inlineMd(line.slice(6))}</li>`;
+      if (line.startsWith("- ") || line.startsWith("* ")) return `<li class="ind-${depth}">${inlineMd(line.slice(2))}</li>`;
+      if (/^\d+\. /.test(line)) return `<li class="ind-${depth}">${inlineMd(line.replace(/^\d+\. /, ""))}</li>`;
+      if (line.startsWith("> ")) return `<blockquote>${inlineMd(line.slice(2))}</blockquote>`;
+      return line ? `<p>${inlineMd(line)}</p>` : "";
     })
     .join("\n");
 }
