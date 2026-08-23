@@ -29,7 +29,7 @@ Grok Bot 環境で回す。Mac は使わない。
    - **重大事実**: 死亡・重傷・列車衝突などの重大災害は要約から絶対に落とさない。圧縮しても死傷の有無と結果は残す
 7. `plaud-inbox summarize --id <id> --template <template_id> --json '{"節名": "本文", ...}'`（節をすべて埋める。1つでも欠けると失敗する）
 8. `plaud-inbox publish <id>`（`site_origin` の `/api/publish` へ meta / transcript / summary を送る。音声は MS-A2 が Plaud から pull）
-8. `mail` は呼ばない。送れない・起こし失敗は `done` せず次週に残す。デモ音（シリアルが `882` 以外）は `list-new` に出ない。publish が成功した時だけ completed になる
+9. `mail` は呼ばない。送れない・起こし失敗は `done` せず次週に残す。デモ音（シリアルが `882` 以外）は `list-new` に出ない。publish が成功した時だけ completed になる
 
 端末録音だけを対象にする。すでに `completed` の id は触らない。
 
