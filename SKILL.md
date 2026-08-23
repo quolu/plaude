@@ -23,8 +23,12 @@ Grok Bot 環境で回す。Mac は使わない。
 3. `plaud-inbox outline <id>` の `outline` から文章の種類を推定する
 4. `plaud-inbox templates --json` の `when` と照合し、テンプレ `id` を1つ選ぶ。同じ JSON の `sections` が、そのテンプレで**書かなければならない節**と各節の記入指示。テンプレは Plaud 公式（web.plaud.ai のテンプレコミュニティ）由来の16種
 5. `plaud-inbox phases --id <id> --json '[{"t": 0, "title": "開会挨拶"}, ...]'`（会議をフェーズへ分ける。`t` は元音声の絶対秒で、`result.json` の `segments` の時刻から取る）
-6. `plaud-inbox summarize --id <id> --template <template_id> --json '{"節名": "本文", ...}'`（節をすべて埋める。1つでも欠けると失敗する）
-7. `plaud-inbox publish <id>`（`site_origin` の `/api/publish` へ meta / transcript / summary を送る。音声は MS-A2 が Plaud から pull）
+6. 要約を書く前の検品（2026-08-23 追加。GrokBot 初回実走の採点で確立）
+   - **固有名詞**: 文字起こし中の社名・路線名・装置名に誤変換の疑いがあれば、要約へ写す前に `vocab add` で登録し、要約には正表記だけを書く
+   - **人名の漢字**: 音声からは読みしか確定しない。表記を確認できない人名は役職＋姓（例: 斉藤部長）に留め、漢字のフルネームを推定して書かない
+   - **重大事実**: 死亡・重傷・列車衝突などの重大災害は要約から絶対に落とさない。圧縮しても死傷の有無と結果は残す
+7. `plaud-inbox summarize --id <id> --template <template_id> --json '{"節名": "本文", ...}'`（節をすべて埋める。1つでも欠けると失敗する）
+8. `plaud-inbox publish <id>`（`site_origin` の `/api/publish` へ meta / transcript / summary を送る。音声は MS-A2 が Plaud から pull）
 8. `mail` は呼ばない。送れない・起こし失敗は `done` せず次週に残す。デモ音（シリアルが `882` 以外）は `list-new` に出ない。publish が成功した時だけ completed になる
 
 端末録音だけを対象にする。すでに `completed` の id は触らない。
