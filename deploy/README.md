@@ -7,14 +7,28 @@ Cloudflare Access → Tunnel home-server (168cebb0-a0e2-44c8-bfdc-d4a91a1ccbfb)
 
 ## コンテナ
 
-Mac で `web/` を build してから image を送る。MS-A2 上で重い build はしない。
+**npm build だけ Mac で行い、image は MS-A2 で組む。** image の中身は `web/dist` と Python だけなので、
+MS-A2 側の build は数秒で終わる（重いのは npm であって docker ではない）。Mac 側で
+cross-arch build（`buildx --platform linux/amd64`）をする必要はない。
 
 ```bash
 cd web && npm ci && npm run build && cd ..
-docker buildx build --platform linux/amd64 -t plaude-web:latest .
-docker save plaude-web:latest | ssh kite@192.168.1.2 docker load
-scp docker-compose.yml docker-compose.override.yml.example kite@192.168.1.2:~/plaude/
-ssh kite@192.168.1.2 'mkdir -p ~/plaude/data && cd ~/plaude && cp -n docker-compose.override.yml.example docker-compose.override.yml; docker compose up -d'
+rsync -a web/dist/     kite@192.168.1.2:~/plaude/web/dist/
+rsync -a --exclude '__pycache__' web-server/ kite@192.168.1.2:~/plaude/web-server/
+rsync -a templates/    kite@192.168.1.2:~/plaude/templates/
+scp Dockerfile .dockerignore docker-compose.yml kite@192.168.1.2:~/plaude/
+ssh kite@192.168.1.2 'cd ~/plaude && docker compose up -d --build'
+```
+
+**`~/plaude/data` を同期対象にしない。** そこは実データの volume であり、repo の `data/` は
+モック fixture である。`.dockerignore` で `data/` を build context から外してあるので、
+会議本文が image に焼き込まれることもない（実行時は `/data` の volume だけを読む）。
+
+確認:
+
+```bash
+ssh kite@192.168.1.2 'curl -s http://127.0.0.1:18880/healthz'
+ssh kite@192.168.1.2 'docker run --rm --entrypoint sh plaude-web:latest -c "ls /app"'   # data が無いこと
 ```
 
 ## Caddy

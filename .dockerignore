@@ -1,0 +1,17 @@
+# 実データ・会議本文は image に焼き込まない（実行時は /data の volume を使う）
+data/
+# build 済みの dist だけを送る
+web/src/
+web/node_modules/
+web/package*.json
+web/tsconfig*.json
+web/vite.config.*
+node_modules/
+.git/
+__pycache__/
+*.pyc
+evidence/
+docs/
+scripts/
+deploy/
+.team/

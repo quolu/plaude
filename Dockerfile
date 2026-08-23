@@ -3,7 +3,6 @@ WORKDIR /app
 COPY web/dist /app/web/dist
 COPY web-server /app/web-server
 COPY templates /app/templates
-COPY data /app/data
 ENV PLAUDE_BIND=0.0.0.0
 ENV PLAUDE_PORT=8080
 ENV PLAUDE_DATA_DIR=/data
