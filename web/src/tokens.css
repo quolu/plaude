@@ -1,0 +1,29 @@
+@font-face {
+  font-family: "Manrope";
+  src: url("/fonts/Manrope-wght.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+}
+
+:root {
+  --orange: #ef8d32;
+  --orange-strong: #c65300;
+  --orange-deep: #a84400;
+  --orange-soft: #fbe5d2;
+  --cobalt: #2149aa;
+  --cobalt-bright: #3b68d7;
+  --ink: #111b35;
+  --ink-soft: #9aa6c2;
+  --night: #071229;
+  --night-soft: #0d1c39;
+  --paper: #f8f5ef;
+  --white: #fffef9;
+  --line: rgba(59, 104, 215, 0.28);
+  --line-strong: rgba(239, 141, 50, 0.55);
+  --font-manrope: "Manrope", "Avenir Next", sans-serif;
+  --font-japanese: "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif;
+  --rail-w: 220px;
+  --dock-h: 58px;
+  --player-h: 72px;
+}

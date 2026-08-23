@@ -337,6 +337,10 @@ def make_handler(data: Path, static_dir: Path, skill_templates: Path, token: str
                 ctype = "text/css; charset=utf-8"
             elif target.suffix == ".svg":
                 ctype = "image/svg+xml"
+            elif target.suffix == ".png":
+                ctype = "image/png"
+            elif target.suffix == ".ttf":
+                ctype = "font/ttf"
             self._send(200, target.read_bytes(), ctype)
 
     return Handler
