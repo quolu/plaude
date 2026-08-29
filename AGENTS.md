@@ -61,7 +61,7 @@ templates/<id>.md
 - 起こしは LAN 内 `asr-worker` の SSH 投函箱（`asr_host` / `asr_engine`）だけ。Plaud クラウドの文字起こし、ローカル Whisper の直叩き、テンプレ生成は呼ばない
 - メールは本線ではない。既定は `steps.mail=false`
 - `publish` は `site_origin` へ meta / transcript / summary / summary_struct / phases を載せる。音声は origin 側が Plaud から pull する
-- **テンプレは要約の器であり、要約そのものを規定する**。テンプレ本文の `## 見出し` が節、直下の `>` 行がその節の記入指示。`summarize` は全節が埋まっている時だけ成功し、その出力（`docs/<id>.md`）が publish する summary の正本になる。文字起こし本文をテンプレへ埋め込まない
+- **テンプレは要約の器であり、要約そのものを規定する**。コミュニティ原文は逐語。`## 見出し` がある骨組み型は、その下が出力の形。`##` が無い指示型は `本文` 1キーで、`templates --json` の `ask` にプロンプト全文を乗せる。`summarize` は全節が埋まっている時だけ成功し、その出力（`docs/<id>.md`）が publish する summary の正本になる。文字起こし本文をテンプレへ埋め込まない。週次・現場・安全・提出物が主なら `meeting-minutes` だけ（`meeting-notes` は短い打合せ・雑談メモだけ）。骨組み型は見本の入れ子を守り、指示型は議題別の決定・TODO・保留で書く。フラットな時系列ダンプは summarize しない
 - **フェーズ（章）は成果物の一部**。`phases` が `[{"t": 絶対秒, "title": 章名}]` を検証（単調増加・音声長以内・冒頭 60 秒以内）して保存し、閲覧面は章目次・章ごとの折り返し・`?p=<n>` の直リンクを出す
 - `phases` と `summarize` を済ませない限り `publish` は失敗する。握りつぶして公開しない
 - 認証は `~/.plaud/tokens.json`。個人 config は `~/.config/plaud-pipeline/config.json`
