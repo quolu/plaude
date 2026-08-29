@@ -82,6 +82,9 @@ https://github.com/quolu/plaude の SKILL.md に従え。
 - asr-worker へ届かない・status が返らない時は転写を保留する。別経路で代替しない
 - メールは呼ばない（既定 steps.mail=false のまま）
 - 固有名詞の誤変換に気づいたら SKILL.md「固有名詞の登録」どおり、その場で登録する
+- 前後と意味が繋がらない固有名詞は事実として採用しない
+- 週次・現場・安全・提出物が主なら meeting-minutes だけ。meeting-notes は短い打合せ・雑談メモだけ
+- フラットな時系列ダンプは summarize しない。器の形を満たさない要約は publish しない
 - 失敗した id は done しない
 - 端末録音（シリアル 882 始まり）だけを対象にする
 - 手順は更新されることがある。ジョブの開始時に git pull で最新の SKILL.md を読む

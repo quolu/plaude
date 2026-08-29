@@ -445,10 +445,11 @@ def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
 
 
 def parse_sections(body: str) -> list[dict]:
-    """`## 見出し` を節、次の `## ` までの本文（逐語）をその節の記入指示として読む。
+    """`## 見出し` を節、次の `## ` までの本文（逐語）をその節の出力の形として読む。
 
     テンプレ本文は取得元の文面をそのまま保持する。節見出しが1つも無い
-    テンプレは「指示型」であり、要約は「本文」1キーで一括して受ける。
+    テンプレは「指示型」であり、render は「本文」1キーで一括する。
+    エージェントへ渡す節は fill_sections()。
     """
     sections: list[dict] = []
     for line in body.splitlines():
@@ -459,6 +460,13 @@ def parse_sections(body: str) -> list[dict]:
     for section in sections:
         section["ask"] = "\n".join(section["ask"]).strip()
     return sections
+
+
+def fill_sections(tpl: dict) -> list[dict]:
+    """summarize が埋める節。指示型はプロンプト全文を ask にした「本文」1キー。"""
+    if tpl["sections"]:
+        return tpl["sections"]
+    return [{"key": "本文", "ask": tpl["body"]}]
 
 
 def parse_template(path: Path) -> dict:
@@ -485,13 +493,18 @@ def cmd_templates(as_json: bool) -> int:
     tpls = templates()
     if as_json:
         rows = [
-            {"id": t["id"], "title": t["title"], "when": t["when"], "sections": t["sections"]}
+            {
+                "id": t["id"],
+                "title": t["title"],
+                "when": t["when"],
+                "sections": fill_sections(t),
+            }
             for t in tpls
         ]
         print(json.dumps(rows, ensure_ascii=False, indent=2))
         return 0
     for t in tpls:
-        keys = " / ".join(s["key"] for s in t["sections"])
+        keys = " / ".join(s["key"] for s in fill_sections(t))
         print(f"{t['id']:24}  {t['title']:12}  {t['when']}")
         print(f"{'':24}  節: {keys}")
     return 0
@@ -559,7 +572,7 @@ def cmd_summarize(cfg: dict, fid: str, template_id: str, payload: str | None, pa
     if not isinstance(given, dict):
         eprint("節名をキーにした JSON オブジェクトで渡す")
         return 1
-    want = [sec["key"] for sec in tpl["sections"]] or ["本文"]
+    want = [sec["key"] for sec in fill_sections(tpl)]
     missing = [k for k in want if not str(given.get(k) or "").strip()]
     unknown = [k for k in given if k not in want]
     if missing or unknown:

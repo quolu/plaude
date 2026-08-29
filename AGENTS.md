@@ -36,7 +36,7 @@ origin は MS-A2 の Docker（`plaude-web`、LAN `192.168.1.2:18880`）だけ。
 
 静的面は `web/`（Vite + 素の TS）。API と静的配信は `web-server/` の1本。YuiHome のフロント枠は使わない。
 
-image は Mac で `web/` を build してから linux/amd64 で送り、MS-A2 上で重い build はしない。
+静的面の npm build は Mac で行い、image は MS-A2 で組む。手順は [deploy/README.md](deploy/README.md)。
 
 ## データ
 
