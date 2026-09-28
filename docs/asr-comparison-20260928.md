@@ -85,7 +85,7 @@ Chromeでグラフと数値、MOSSの入力別話者表示、生成失敗の表�
 
 ## 再現とCohereの再開
 
-録音の本文を含むファイルは下記の`$taskDir`へ置く。モデルの取得と素材準備は完了しているため、現在地からの再開時には繰り返さない。
+録音の本文を含むファイルは下記の`$taskDir`へ置く。Cohere以外のモデル取得と素材準備は完了しているため、現在地からの再開時には繰り返さない。
 
 ```powershell
 $taskDir = Join-Path $env:TEMP 'plaude-asr-comparison-20260928'
@@ -98,7 +98,7 @@ foreach ($suite in @('fleurs','10min','recovery','full')) {
 }
 ```
 
-BuzzとWhisperの対照実験は`run --engine buzz --suite fleurs --decoding plain`と`run --engine buzz --suite recovery --decoding plain`。結果は`buzz-plain-*.json`と`whisper-plain-*.json`へ別名で保存する。失敗は`*-failure.json`へ出力と生成トークンを残して非ゼロで終了する。依存パッケージの実効版は一時ディレクトリの`packages.txt`へ保存した。
+対照実験は`--engine buzz`または`--engine whisper`、`--suite fleurs`または`--suite recovery`に、`--decoding plain`を指定する。結果は`buzz-plain-*.json`と`whisper-plain-*.json`へ別名で保存する。失敗は`*-failure.json`へ出力と生成トークンを残して非ゼロで終了する。依存パッケージの実効版は一時ディレクトリの`packages.txt`へ保存した。
 
 ## 出典
 
