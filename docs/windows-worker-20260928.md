@@ -17,7 +17,8 @@ WindowsのPowerShell構文とパスを利用者へ持たせない。
 | 接続不能・失敗・v1結果・未知statusの保留 | focused testで確認 |
 | Fox本体の再起動後 | 再起動の了承待ち |
 | GrokBotの定期処理 | 実行環境の確認待ち |
-| GitHubへの通常push | 了承待ち |
+| GitHubへの通常push | 本体とPlaudeのmainへ反映済み |
+| 公開コミット導入後の確認 | 10分の実録音を再投函し、93セグメント・3話者・coverage 1.0・反復0で回収 |
 
 確認結果は既存ASR比較画面の「WindowsのSSH投函経路」に掲載した。
 録音と転写はprivateな一時ディレクトリだけへ保存し、既存会議の公開データは変更していない。
@@ -26,7 +27,7 @@ WindowsのPowerShell構文とパスを利用者へ持たせない。
 
 Foxの再起動が許可されたら、実行中の確認ジョブが無いことを確かめて再起動し、
 SSH復旧後に別IDの10分音声をPlaudeから投函する。手動ログインやアプリ起動は行わない。
-通常pushが許可されたら、本体・利用者のコミットを送って導入対象が既定ブランチの祖先であることを確認する。
+本体の公開コミット76da883をFoxへinstall.ps1で導入し直した。導入済みファイルのSHA-256は公開コミットと一致し、origin/mainの祖先であることも確認した。
 GrokBotの実行環境が判明したら、公開手順でリポジトリを更新し、個人configのasr_hostをFoxへ更新して疎通を確認する。
 
 asr-worker本体の実装・導入手順は[本体README](../../asr-worker/README.md)と[復旧記録](../../asr-worker/docs/windows-native-20260928.md)を参照する。
