@@ -2,7 +2,7 @@
   "email_to": "you@example.com",
   "email_from": "",
   "device_sn_prefix": "882",
-  "asr_host": "fox-wsl",
+  "asr_host": "fox",
   "asr_engine": "whisper",
   "outline_chars": 4000,
   "data_dir": "~/.local/share/plaud-pipeline",

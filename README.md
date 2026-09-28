@@ -12,7 +12,7 @@ Plaud NotePin S の録音を、Plaud の文字起こし分数を使わずに取�
 
 - Linux（Grok Bot 環境）。macOS でも動くが必須ではない
 - 公式 Plaud CLI ログイン（`npx @plaud-ai/cli login`、トークンは `~/.plaud/tokens.json`）
-- LAN 内 asr-worker（RTX 5090 / WSL2）への SSH 到達。ssh alias `fox-wsl` を用意する（下記）
+- LAN 内 asr-worker（RTX 5090 / Windows）への SSH 到達。ssh alias `fox` を用意する（下記）
 - `ffmpeg`
 - 送信: システムの `sendmail` または `mail`/`mailx`。なければ個人 config の SMTP（パスワードは環境変数。リポジトリには置かない）
 
@@ -28,24 +28,24 @@ mkdir -p ~/.local/bin
 # ~/.local/bin を PATH に入れる
 ```
 
-文字起こしは**このマシンでは行わない**。LAN 内 asr-worker（`ssh fox-wsl`）へ SSH で投函し、
+文字起こしは**このマシンでは行わない**。LAN 内 asr-worker（`ssh fox`）へ SSH で投函し、
 `result.json` を回収する。ローカル whisper を持たないのは設計であり、欠品ではない。
 
-### asr-worker への ssh alias（2026-08-23 確立）
+### asr-workerへのSSH接続
 
-Grok Bot 環境（クラウド）からは、メインサーバを踏み台にして WSL2 へ直結する。
+Grok Bot 環境（クラウド）からは、必要なSSH踏み台を使って、FoxのWindows標準OpenSSHへ接続する。
 契約と運用条件の正本は [asr-worker](https://github.com/kitepon/asr-worker) の AGENTS.md。
 
 ```
-Host fox-wsl
+Host fox
   HostName 192.168.1.11
-  Port 2222
-  User kite
-  ProxyJump grokbot.kitepon.dev
-  IdentityFile ~/.ssh/<grokbot.kitepon.dev に使っている鍵>
+  Port 22
+  User kite_
+  IdentityFile ~/.ssh/<Foxへの接続鍵>
+  # LAN外の実行環境では、実際に利用するSSH踏み台をProxyJumpに指定する
 ```
 
-疎通確認は `ssh fox-wsl 'hostname && ls ~/asr/bin/submit'`（`FOX` が返れば開通）。
+疎通確認は `ssh fox '~/asr/bin/asr-worker info'`。`asr-worker.info.v1`と`asr-worker.result.v2`が返ることを確認する。
 
 送信は `email_to` 宛。`mail_backend` が `auto` のとき、sendmail → `mail`/`mailx` → `smtp_host` →（Mac だけ）Mail.app の順。SMTP を使うなら個人の `config.json` に `smtp_host` / `smtp_port` / `smtp_user` を書き、パスワードは `PLAUD_SMTP_PASSWORD`。
 
@@ -77,7 +77,7 @@ https://github.com/quolu/plaude の SKILL.md に従え。
 手順は SKILL.md の「1時間おき」どおり。Mac や Mail.app は不要。
 
 - 認証は既に plaud login 済みの ~/.plaud/tokens.json を使う
-- Plaud のクラウド文字起こしは使わない。起こしは LAN 内 asr-worker（config の asr_host=fox-wsl、
+- Plaud のクラウド文字起こしは使わない。起こしは LAN 内 asr-worker（config の asr_host=fox、
   asr_engine=whisper）だけ。ローカル whisper の直叩きへフォールバックしない
 - asr-worker へ届かない・status が返らない時は転写を保留する。別経路で代替しない
 - メールは呼ばない（既定 steps.mail=false のまま）

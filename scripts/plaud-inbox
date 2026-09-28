@@ -313,7 +313,7 @@ class WorkerTranscribeError(RuntimeError):
 
 def worker_call(cmd: list[str]) -> str:
     try:
-        result = subprocess.run(cmd, text=True, capture_output=True, check=False)
+        result = subprocess.run(cmd, text=True, encoding="utf-8", capture_output=True, check=False)
     except OSError as e:
         raise WorkerTranscribeError("TRANSCRIBE_WORKER_UNREACHABLE", str(e)) from e
     if result.returncode:
@@ -335,15 +335,33 @@ def worker_engine(cfg: dict) -> str:
     return engine
 
 
-def worker_status(host: str, fid: str) -> dict:
-    raw = worker_call(["ssh", host, f"cat ~/asr/jobs/{fid}/status.json"])
+def worker_command(host: str, command: str) -> dict:
+    raw = worker_call(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, f"~/asr/bin/asr-worker {command}"])
     try:
         status = json.loads(raw)
     except json.JSONDecodeError as e:
-        raise WorkerTranscribeError("TRANSCRIBE_WORKER_PROTOCOL_ERROR", "status.json が JSON ではない") from e
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_PROTOCOL_ERROR", "worker の応答が JSON ではない") from e
     if not isinstance(status, dict):
-        raise WorkerTranscribeError("TRANSCRIBE_WORKER_PROTOCOL_ERROR", "status.json が object ではない")
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_PROTOCOL_ERROR", "worker の応答が object ではない")
     return status
+
+
+def worker_prepare(host: str, fid: str) -> dict:
+    job = worker_command(host, f"prepare {worker_job_id(fid)}")
+    if job.get("schema") != "asr-worker.job.v1" or not all(
+        isinstance(job.get(key), str) and job[key] and not any(c in job[key] for c in "\n\r")
+        for key in ("audio_path", "result_path")
+    ):
+        raise WorkerTranscribeError("TRANSCRIBE_WORKER_PROTOCOL_ERROR", "worker の投函先が不正")
+    return job
+
+
+def worker_status(host: str, fid: str) -> dict:
+    return worker_command(host, f"status {worker_job_id(fid)}")
+
+
+def worker_copy(source: str, destination: str) -> None:
+    worker_call(["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", source, destination])
 
 
 def worker_result_segments(path: Path) -> tuple[dict, list[dict]]:
@@ -393,7 +411,7 @@ def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
         return 1
     state = load_state(cfg)
     dd = data_dir(cfg)
-    host = str(cfg.get("asr_host") or "fox-wsl")
+    host = str(cfg.get("asr_host") or "fox")
     if not ids:
         ids = [
             fid
@@ -409,9 +427,9 @@ def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
         try:
             job = worker_job_id(fid)
             engine = worker_engine(cfg)
-            worker_call(["ssh", host, f"mkdir -p ~/asr/inbox/{job}"])
-            worker_call(["scp", str(src), f"{host}:~/asr/inbox/{job}/audio.mp3"])
-            worker_call(["ssh", host, f"~/asr/bin/submit {shlex.quote(job)} --engine {shlex.quote(engine)}"])
+            paths = worker_prepare(host, job)
+            worker_copy(str(src), f"{host}:{paths['audio_path']}")
+            worker_command(host, f"submit {job} --engine {engine}")
             while True:
                 status = worker_status(host, job)
                 state_name = status.get("status")
@@ -424,7 +442,7 @@ def cmd_transcribe(cfg: dict, ids: list[str]) -> int:
                     raise WorkerTranscribeError("TRANSCRIBE_WORKER_PROTOCOL_ERROR", f"未知の worker status: {state_name!r}")
                 time.sleep(2)
             result_path = dd / "transcripts" / f"{fid}.json"
-            worker_call(["scp", f"{host}:~/asr/jobs/{job}/result.json", str(result_path)])
+            worker_copy(f"{host}:{paths['result_path']}", str(result_path))
             result, segments = worker_result_segments(result_path)
         except WorkerTranscribeError as e:
             return mark_transcribe_error(cfg, state, fid, rec, e)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -53,8 +54,16 @@ PLAUD_API_BASE = ""
 
 
 def run_publish(config: Path, fid: str) -> subprocess.CompletedProcess[str]:
+    # publishの試験は認証の試験を兼ねない。実トークンの期限と更新に依存させない。
+    runner = """
+import runpy,sys
+module = runpy.run_path(sys.argv[1], run_name='plaud_inbox_test')
+module['main'].__globals__['access_token'] = lambda: 'test-token'
+sys.argv = [sys.argv[1], '--config', sys.argv[2], 'publish', sys.argv[3]]
+raise SystemExit(module['main']())
+"""
     return subprocess.run(
-        [str(INBOX), "--config", str(config), "publish", fid],
+        [sys.executable, "-c", runner, str(INBOX), str(config), fid],
         text=True,
         capture_output=True,
         env={**os.environ, "PLAUD_API_BASE": PLAUD_API_BASE},
@@ -141,12 +150,17 @@ def fake_worker(root: Path) -> tuple[Path, Path]:
     log = root / "worker-calls.jsonl"
     (bindir / "ssh").write_text(
         "#!/usr/bin/env python3\n"
-        "import os, sys\n"
+        "import json, os, sys\n"
         "from pathlib import Path\n"
         "Path(os.environ['FAKE_LOG']).open('a').write('ssh ' + repr(sys.argv[1:]) + '\\n')\n"
         "if os.environ.get('FAKE_SSH_UNREACHABLE') == '1':\n"
         "    print('connection refused', file=sys.stderr); raise SystemExit(255)\n"
-        "if 'cat ~/asr/jobs/' in sys.argv[-1]: print(os.environ.get('FAKE_STATUS', '{\\\"status\\\": \\\"done\\\"}'))\n",
+        "command = sys.argv[-1].split()\n"
+        "if command[1] == 'prepare':\n"
+        "    fid = command[2]\n"
+        "    print(json.dumps({'schema':'asr-worker.job.v1', 'audio_path':f'C:/Users/kite_/asr/inbox/{fid}/audio.mp3', 'result_path':f'C:/Users/kite_/asr/jobs/{fid}/result.json'}))\n"
+        "elif command[1] == 'status': print(os.environ.get('FAKE_STATUS', '{\"status\": \"done\"}'))\n"
+        "else: print('{\"status\": \"queued\"}')\n",
         encoding="utf-8",
     )
     (bindir / "scp").write_text(
@@ -154,8 +168,8 @@ def fake_worker(root: Path) -> tuple[Path, Path]:
         "import os, sys\n"
         "from pathlib import Path\n"
         "Path(os.environ['FAKE_LOG']).open('a').write('scp ' + repr(sys.argv[1:]) + '\\n')\n"
-        "if sys.argv[1].startswith('fake-worker:~/asr/jobs/'):\n"
-        "    Path(sys.argv[2]).write_text(os.environ['FAKE_RESULT'], encoding='utf-8')\n",
+        "if sys.argv[-2].startswith('fake-worker:C:/Users/kite_/asr/jobs/'):\n"
+        "    Path(sys.argv[-1]).write_text(os.environ['FAKE_RESULT'], encoding='utf-8')\n",
         encoding="utf-8",
     )
     for command in (bindir / "ssh", bindir / "scp"):
@@ -294,9 +308,9 @@ def main() -> int:
             assert worker["speakers"] == ["Speaker 1", "Speaker 2"]
             assert worker["diarizer"] == "pyannote"
             calls = log.read_text(encoding="utf-8")
-            assert "~/asr/inbox/worker-ok/audio.mp3" in calls
+            assert "C:/Users/kite_/asr/inbox/worker-ok/audio.mp3" in calls
             assert "submit worker-ok --engine parakeet" in calls
-            assert "~/asr/jobs/worker-ok/result.json" in calls
+            assert "C:/Users/kite_/asr/jobs/worker-ok/result.json" in calls
 
             failed_worker_state = seed_audio(worker_root, "worker-failed")
             result = run_transcribe(worker_config, "worker-failed", worker_env | {
