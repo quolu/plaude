@@ -7,7 +7,7 @@ Cloudflare Access → Tunnel home-server (168cebb0-a0e2-44c8-bfdc-d4a91a1ccbfb)
 
 ## コンテナ
 
-ベースは `python:3.12.15-alpine3.24` の manifest list ダイジェスト固定。OS は Alpine Linux 3.24。`ca-certificates` と `ca-certificates-bundle` は `20261020-r0` 固定（SEC021）。準備記録と本番へ載せる前の確認は [docs/sec021-ca-certificates.md](../docs/sec021-ca-certificates.md)。この README の `docker compose up` は、その準備が承認されたあとの手順である。
+ベースは `python:3.12.15-alpine3.24` の manifest list ダイジェスト固定。OS は Alpine Linux 3.24。`ca-certificates` と `ca-certificates-bundle` は `20261020-r0` 固定（SEC021）。準備記録は [docs/sec021-ca-certificates.md](../docs/sec021-ca-certificates.md)。SEC021 を本番へ載せるときは、その記録の承認後に build とイメージ検査を終えてからコンテナを入れ替える。下の `docker compose up -d --build` は通常の載せ替えであり、検査前の再起動を兼ねる。
 
 **npm build だけ Mac で行い、image は MS-A2 で組む。** image の中身は `web/dist` と Python だけなので、
 MS-A2 側の build は数秒で終わる（重いのは npm であって docker ではない）。Mac 側で
