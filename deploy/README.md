@@ -35,6 +35,20 @@ ssh kite@192.168.1.2 'curl -sD - -o /dev/null http://127.0.0.1:18880/m/<id>/summ
 ssh kite@192.168.1.2 'docker run --rm --entrypoint sh plaude-web:latest -c "ls /app"'   # data が無いこと
 ```
 
+## イメージと退避を溜めない
+
+ホストの `~/plaude` は git checkout ではない。古い `plaude-web` イメージと QNAP 上の退避を溜めない手順の正本は [docs/ops/image-retention.md](../docs/ops/image-retention.md)。コンテナは止めない。`docker system prune` や `docker image rm -f` は使わない。
+
+順番は次だけ。
+
+1. **tag** — 載せ替える前に、いまのイメージへ `plaude-web:pre-<id>-<YYYYMMDD>` を付ける
+2. **deploy** — 上の rsync / scp と `docker compose up -d --build`
+3. **health** — `curl -fsS http://127.0.0.1:18880/healthz`
+4. **backup** — `~/plaude/scripts/ops/plaude-image-retention backup --apply`
+5. **retention** — `~/plaude/scripts/ops/plaude-image-retention --apply`
+
+health が失敗したときは 4 と 5 を走らせない。戻しは手順 1 の `pre-*` タグから行う。
+
 ## Caddy
 
 `deploy/caddy-plaud.kitepon.dev.txt` を `>> /home/kite/license-server/Caddyfile`。inode を変えない。`docker exec caddy caddy reload --config /etc/caddy/Caddyfile`。効かなければ `docker restart caddy`。
