@@ -140,6 +140,8 @@ ssh kite@192.168.1.2 'docker save plaude-web:sec021-rollback-20261022 -o ~/plaud
 
 tar は `~/plaude/data` の中に置かない。`docker image inspect` の Id を控える。tag と tar の両方が戻し元である。
 
+この `~/plaude-web-sec021-rollback-20261022.tar` は、この切替一回の戻し用である。毎回の配備でイメージと QNAP 上の退避を溜めない手順は [ops/image-retention.md](ops/image-retention.md)。順番は、いまのイメージへ `pre-<id>-<YYYYMMDD>` を付け、載せ替え、health を見てから backup、そのあと retention である。
+
 2. Mac で `web/` をビルドし、既存の rsync / scp で `web/dist`、`web-server`、`templates`、`Dockerfile`、`.dockerignore`、`docker-compose.yml` を `~/plaude/` に置く。`data/` は送らない。
 
 3. コンテナを入れ替える前に、イメージだけ組む。

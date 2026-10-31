@@ -1,0 +1,1189 @@
+#!/usr/bin/env bash
+# plaude-web のイメージと QNAP 上の退避を、必要な分だけ残す。
+#
+# 既定は計画だけ（--dry-run）。消す・コピーするのは --apply のときだけ。
+# コンテナは止めない。docker の一括削除や --force は使わない。
+# 他製品のイメージは消さない。
+#
+# 手順の正本は docs/ops/image-retention.md。
+set -euo pipefail
+export LC_ALL=C
+
+REPO=plaude-web
+COMPOSE_LABEL=com.docker.compose.project
+COMPOSE_PROJECT=plaude
+QNAP_ROOT=${PLAUDE_QNAP_ROOT:-/var/mnt/qnap-backups/main-server/products/plaude}
+LOCAL_TAR_DIR=${PLAUDE_LOCAL_TAR_DIR:-${HOME:-}/plaude-image-backups}
+PLAUDE_ROOT=${PLAUDE_ROOT:-${HOME:-}/plaude}
+MAX_SETS=${PLAUDE_MAX_SETS:-3}
+MAX_BYTES=${PLAUDE_MAX_BYTES:-$((500 * 1024 * 1024))}
+MIN_TAR_BYTES=1024
+CHUNK_BYTES=$((1024 * 1024))
+
+DOCKER=${PLAUDE_DOCKER:-docker}
+IONICE=${PLAUDE_IONICE:-ionice}
+RSYNC=${PLAUDE_RSYNC:-rsync}
+SHA256SUM=${PLAUDE_SHA256SUM:-sha256sum}
+
+APPLY=0
+SAW_DRY=0
+SAW_APPLY=0
+COMMAND=retain
+WORK=
+LOCK=
+WARNINGS=0
+
+# Pipe, not tab: bash read collapses empty tab fields, which drops the tag
+# list of a dangling image and shifts the compose label into the tag field.
+INSPECT_FMT='{{.Id}}{{"|"}}{{.Created}}{{"|"}}{{.Size}}{{"|"}}{{range $i, $t := .RepoTags}}{{if $i}},{{end}}{{$t}}{{end}}{{"|"}}{{if .Config.Labels}}{{index .Config.Labels "com.docker.compose.project"}}{{end}}'
+
+usage() {
+  cat <<'EOF'
+usage: plaude-image-retention [--dry-run|--apply] [retain|backup]
+
+  retain (default)
+      List plaude-web images and dangling images labelled
+      com.docker.compose.project=plaude. Keep the image used by any
+      container and the newest pre-<id>-<YYYYMMDD> tag. Plan removal of
+      the rest, one image id at a time. Also plan QNAP backup sets down
+      to the newest 3 or 500MiB, whichever is smaller. Never plan to
+      delete the newest verified set.
+
+  backup
+      docker save the newest pre-* tag, write sha256, copy the tar,
+      checksum, and source/Dockerfile to the QNAP set with
+      ionice -c3 rsync --bwlimit=10m, verify sha256 on the QNAP side,
+      then delete the local tar. At most one local tar is kept.
+
+  --dry-run   print the plan and change nothing (default)
+  --apply     perform the plan
+
+Environment (flags override these):
+  PLAUDE_QNAP_ROOT PLAUDE_LOCAL_TAR_DIR PLAUDE_ROOT
+  PLAUDE_MAX_SETS PLAUDE_MAX_BYTES
+  PLAUDE_QNAP_TRUST=1   allow a non-NFS QNAP path (fixtures only)
+EOF
+}
+
+die() {
+  printf 'plaude-image-retention: %s\n' "$*" >&2
+  exit 1
+}
+
+warn() {
+  WARNINGS=$((WARNINGS + 1))
+  printf 'warning: %s\n' "$*" >&2
+}
+
+say() {
+  printf '%s\n' "$*"
+}
+
+need_int() {
+  local name=$1 value=$2 min=$3
+  case "$value" in
+    ''|*[!0-9]*) die "$name must be a non-negative integer" ;;
+  esac
+  if [ "$value" -lt "$min" ]; then
+    die "$name must be >= $min"
+  fi
+}
+
+cleanup() {
+  if [ -n "$LOCK" ] && [ -d "$LOCK" ]; then
+    rm -r -- "$LOCK" 2>/dev/null || true
+  fi
+  if [ -n "$WORK" ] && [ -d "$WORK" ]; then
+    rm -r -- "$WORK" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+reject_docker_arg() {
+  case "$1" in
+    prune|--force|-f|--force=*)
+      die "refusing docker argument: $1"
+      ;;
+  esac
+}
+
+run_docker() {
+  local arg
+  [ "$#" -ge 1 ] || die "missing docker command"
+  for arg in "$@"; do
+    reject_docker_arg "$arg"
+  done
+  case "$1" in
+    image)
+      case "${2:-}" in
+        ls|inspect|rm) ;;
+        *) die "refusing docker image subcommand: ${2:-}" ;;
+      esac
+      ;;
+    ps|save) ;;
+    *) die "refusing docker command: $1" ;;
+  esac
+  if [ "$1" = image ] && [ "$2" = rm ]; then
+    [ "$#" -eq 3 ] || die "docker image rm takes exactly one id"
+    case "$3" in
+      -*) die "refusing docker image rm target: $3" ;;
+    esac
+  fi
+  "$DOCKER" "$@"
+}
+
+valid_date() {
+  local day=$1 month dom
+  case "$day" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *) return 1 ;;
+  esac
+  month=${day:4:2}
+  dom=${day:6:2}
+  case "$month" in
+    0[1-9]|1[0-2]) ;;
+    *) return 1 ;;
+  esac
+  case "$dom" in
+    0[1-9]|[12][0-9]|3[01]) ;;
+    *) return 1 ;;
+  esac
+}
+
+valid_pre_id() {
+  case "$1" in
+    ''|.*|*/*|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+}
+
+# Prints "<pre-id> <YYYYMMDD>" for plaude-web:pre-<id>-<YYYYMMDD>.
+parse_pre_tag() {
+  local ref=${1#${REPO}:} date rest id
+  case "$1" in
+    "${REPO}":*) ;;
+    *) return 1 ;;
+  esac
+  case "$ref" in
+    pre-*-????????) ;;
+    *) return 1 ;;
+  esac
+  date=${ref##*-}
+  valid_date "$date" || return 1
+  rest=${ref%-"$date"}
+  id=${rest#pre-}
+  valid_pre_id "$id" || return 1
+  printf '%s %s\n' "$id" "$date"
+}
+
+no_whitespace_path() {
+  local name=$1 value=$2
+  case "$value" in
+    ''|*[[:space:]]*) die "$name must be a non-empty path without whitespace" ;;
+  esac
+}
+
+ensure_qnap() {
+  local fstype
+  no_whitespace_path "qnap root" "$QNAP_ROOT"
+  [ -d "$QNAP_ROOT" ] || die "qnap root is not a directory: $QNAP_ROOT"
+  [ -L "$QNAP_ROOT" ] && die "qnap root must not be a symlink: $QNAP_ROOT"
+  QNAP_ROOT=$(realpath -e "$QNAP_ROOT")
+  if [ "${PLAUDE_QNAP_TRUST:-}" = 1 ]; then
+    return 0
+  fi
+  fstype=$(findmnt -T "$QNAP_ROOT" -n -o FSTYPE 2>/dev/null || true)
+  case "$fstype" in
+    nfs|nfs4) ;;
+    *)
+      die "refusing qnap root $QNAP_ROOT (filesystem ${fstype:-unknown}). It must be the QNAP NFS mount. PLAUDE_QNAP_TRUST=1 is only for a fixture."
+      ;;
+  esac
+}
+
+ensure_local_dir_safe() {
+  local local_real data_real qnap_real parent
+  no_whitespace_path "local tar dir" "$LOCAL_TAR_DIR"
+  no_whitespace_path "plaude root" "$PLAUDE_ROOT"
+  parent=$(dirname "$LOCAL_TAR_DIR")
+  [ -d "$parent" ] || die "parent of local tar dir does not exist: $parent"
+  if [ -e "$LOCAL_TAR_DIR" ] && [ -L "$LOCAL_TAR_DIR" ]; then
+    die "local tar dir must not be a symlink: $LOCAL_TAR_DIR"
+  fi
+  if [ -d "$LOCAL_TAR_DIR" ]; then
+    local_real=$(realpath -e "$LOCAL_TAR_DIR")
+  else
+    local_real=$(realpath -m "$LOCAL_TAR_DIR")
+  fi
+  qnap_real=$(realpath -m "$QNAP_ROOT")
+  data_real=$(realpath -m "$PLAUDE_ROOT/data")
+  case "$local_real" in
+    /) die "refusing local tar dir /" ;;
+  esac
+  case "$local_real/" in
+    "$qnap_real/"*) die "local tar dir must stay on the host disk, not on QNAP" ;;
+    "$data_real/"*) die "local tar dir must not be inside meeting data ($data_real)" ;;
+  esac
+  if [ "$APPLY" -eq 1 ]; then
+    mkdir -p -- "$local_real"
+    local_real=$(realpath -e "$local_real")
+  fi
+  LOCAL_TAR_DIR=$local_real
+}
+
+acquire_lock() {
+  local pid
+  LOCK="$LOCAL_TAR_DIR/.plaude-image-retention.lock"
+  if mkdir -- "$LOCK" 2>/dev/null; then
+    printf '%s\n' "$$" > "$LOCK/pid"
+    return 0
+  fi
+  pid=$(cat "$LOCK/pid" 2>/dev/null || true)
+  case "$pid" in
+    ''|*[!0-9]*)
+      ;;
+    *)
+      if [ -d "/proc/$pid" ]; then
+        LOCK=
+        die "already running (pid $pid)"
+      fi
+      ;;
+  esac
+  rm -r -- "$LOCK" || die "could not clear a stale lock at $LOCK"
+  mkdir -- "$LOCK" || die "could not take lock at $LOCK"
+  printf '%s\n' "$$" > "$LOCK/pid"
+}
+
+# Read stdin and write stdout at no more than 10 MiB/s.
+# A full 1 MiB block is followed by a 0.1s pause, so a large read from
+# local disk stays under the cap. iflag=fullblock is required: without it,
+# dd on a pipe can return a short block and this would stop early.
+throttle_10mib() {
+  local err n
+  err=$(mktemp "${TMPDIR:-/tmp}/plaude-throttle.XXXXXX") || return 1
+  while true; do
+    if ! dd bs="$CHUNK_BYTES" count=1 iflag=fullblock 2>"$err"; then
+      rm -- "$err"
+      return 1
+    fi
+    n=$(awk 'NR==3 {print $1; exit}' "$err")
+    case "$n" in
+      ''|*[!0-9]*)
+        rm -- "$err"
+        printf 'plaude-image-retention: could not read dd byte count\n' >&2
+        return 1
+        ;;
+    esac
+    if [ "$n" -eq 0 ]; then
+      rm -- "$err"
+      return 0
+    fi
+    if [ "$n" -lt "$CHUNK_BYTES" ]; then
+      rm -- "$err"
+      return 0
+    fi
+    sleep 0.1
+  done
+}
+
+image_id_ok() {
+  case "$1" in
+    sha256:[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+collect_image_ids() {
+  : > "$WORK/ids.raw"
+  run_docker image ls --no-trunc --filter reference="$REPO" --format '{{.ID}}' >> "$WORK/ids.raw"
+  run_docker image ls --no-trunc \
+    --filter dangling=true \
+    --filter "label=${COMPOSE_LABEL}=${COMPOSE_PROJECT}" \
+    --format '{{.ID}}' >> "$WORK/ids.raw"
+  : > "$WORK/ids"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    image_id_ok "$id" || die "unexpected image id from docker image ls: $id"
+    printf '%s\n' "$id"
+  done < "$WORK/ids.raw" | sort -u > "$WORK/ids"
+}
+
+inspect_into() {
+  local id=$1 line iid created size tags label dir
+  line=$(run_docker image inspect --format "$INSPECT_FMT" "$id") || die "docker image inspect failed for $id"
+  line=${line%$'\r'}
+  IFS='|' read -r iid created size tags label <<<"$line"
+  image_id_ok "$iid" || die "unexpected inspect id for $id: $iid"
+  case "$size" in
+    ''|*[!0-9]*) die "unexpected image size for $iid: ${size:-empty}" ;;
+  esac
+  dir="$WORK/img/$iid"
+  mkdir -p -- "$dir"
+  printf '%s\n' "$created" > "$dir/created"
+  printf '%s\n' "$size" > "$dir/size"
+  printf '%s\n' "$tags" > "$dir/tags"
+  printf '%s\n' "$label" > "$dir/label"
+}
+
+ps_ancestor_hits() {
+  local ancestor=$1 out
+  out=$(run_docker ps -a --filter "ancestor=${ancestor}" --format '{{.ID}}') || die "docker ps failed for ancestor=$ancestor"
+  [ -n "$out" ]
+}
+
+image_in_use() {
+  local id=$1 hex
+  if ps_ancestor_hits "$id"; then
+    return 0
+  fi
+  hex=${id#sha256:}
+  if [ "$hex" != "$id" ] && ps_ancestor_hits "$hex"; then
+    return 0
+  fi
+  return 1
+}
+
+tag_list() {
+  local tags=$1
+  if [ -z "$tags" ]; then
+    return 0
+  fi
+  printf '%s\n' "$tags" | tr ',' '\n'
+}
+
+tags_have_foreign() {
+  local tags=$1 tag
+  [ -n "$tags" ] || return 1
+  while IFS= read -r tag; do
+    [ -n "$tag" ] || continue
+    case "$tag" in
+      "${REPO}":*) ;;
+      *) return 0 ;;
+    esac
+  done < <(tag_list "$tags")
+  return 1
+}
+
+classify_images() {
+  local id created size tags label dir in_use foreign dangling reason newest_id newest_line parsed tag
+  : > "$WORK/pre-tags"
+  : > "$WORK/images.tsv"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    inspect_into "$id"
+  done < "$WORK/ids"
+
+  if [ -d "$WORK/img" ]; then
+    for dir in "$WORK/img"/sha256:*; do
+      [ -d "$dir" ] || continue
+      id=$(basename "$dir")
+      created=$(cat "$dir/created")
+      tags=$(cat "$dir/tags")
+      # A tag shared with another repository is not a plaude rollback image.
+      # docker image rm by id would remove that other tag too, so the image
+      # is left alone and its pre-* tag does not win "newest".
+      if tags_have_foreign "$tags"; then
+        continue
+      fi
+      while IFS= read -r tag; do
+        [ -n "$tag" ] || continue
+        if parsed=$(parse_pre_tag "$tag"); then
+          # date, created, tag, image id
+          printf '%s\t%s\t%s\t%s\n' "${parsed#* }" "$created" "$tag" "$id" >> "$WORK/pre-tags"
+        fi
+      done < <(tag_list "$tags")
+    done
+  fi
+
+  newest_id=
+  newest_line=
+  if [ -s "$WORK/pre-tags" ]; then
+    sort -t $'\t' -k1,1r -k2,2r -k3,3r -o "$WORK/pre-tags.sorted" "$WORK/pre-tags"
+    IFS= read -r newest_line < "$WORK/pre-tags.sorted" || die "could not read newest pre tag"
+    newest_id=${newest_line##*$'\t'}
+    printf '%s\n' "$newest_line" > "$WORK/newest-pre"
+  else
+    : > "$WORK/newest-pre"
+  fi
+
+  if [ -d "$WORK/img" ]; then
+    for dir in "$WORK/img"/sha256:*; do
+      [ -d "$dir" ] || continue
+      id=$(basename "$dir")
+      created=$(cat "$dir/created")
+      size=$(cat "$dir/size")
+      tags=$(cat "$dir/tags")
+      label=$(cat "$dir/label")
+      in_use=no
+      if image_in_use "$id"; then
+        in_use=yes
+        printf 'yes\n' > "$dir/in_use"
+      else
+        printf 'no\n' > "$dir/in_use"
+      fi
+      if [ -n "$tags" ]; then
+        dangling=no
+      else
+        dangling=yes
+      fi
+      foreign=no
+      if tags_have_foreign "$tags"; then
+        foreign=yes
+      fi
+      reason=
+      decision=remove
+      if [ "$foreign" = yes ]; then
+        decision=skip
+        reason="foreign-tag"
+      elif [ "$dangling" = yes ] && [ "$label" != "$COMPOSE_PROJECT" ]; then
+        decision=skip
+        reason="label-mismatch"
+      elif [ "$in_use" = yes ] || [ "$id" = "$newest_id" ]; then
+        decision=keep
+        if [ "$in_use" = yes ]; then
+          reason="in-use"
+        fi
+        if [ "$id" = "$newest_id" ]; then
+          if [ -n "$reason" ]; then
+            reason="$reason,newest-pre"
+          else
+            reason="newest-pre"
+          fi
+        fi
+      else
+        decision=remove
+        reason=unneeded
+      fi
+      printf '%s\n' "$decision" > "$dir/decision"
+      printf '%s\n' "$reason" > "$dir/reason"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$id" "$decision" "$reason" "${tags:--}" "$dangling" "$size" "$created" "$in_use" \
+        >> "$WORK/images.tsv"
+    done
+  fi
+}
+
+print_image_plan() {
+  local id decision reason tags dangling size created in_use
+  local pre_date pre_created pre_tag pre_image
+  if [ -s "$WORK/newest-pre" ]; then
+    IFS=$'\t' read -r pre_date pre_created pre_tag pre_image < "$WORK/newest-pre"
+    say "newest_pre tag=$pre_tag image=$pre_image date=$pre_date created=$pre_created"
+  else
+    say "newest_pre tag=- image=-"
+  fi
+  if [ -s "$WORK/images.tsv" ]; then
+    sort -t $'\t' -k1,1 -o "$WORK/images.sorted" "$WORK/images.tsv"
+    while IFS=$'\t' read -r id decision reason tags dangling size created in_use; do
+      say "list_image id=$id tags=$tags dangling=$dangling size=$size created=$created in_use=$in_use label_decision=$decision"
+      case "$decision" in
+        keep) say "keep_image id=$id tags=$tags reason=$reason size=$size" ;;
+        skip) say "skip_image id=$id tags=$tags reason=$reason size=$size" ;;
+        remove) say "remove_image id=$id tags=$tags reason=$reason size=$size action=plan" ;;
+      esac
+    done < "$WORK/images.sorted"
+  fi
+}
+
+apply_image_removals() {
+  local id decision reason tags dangling size created in_use
+  IMAGE_BYTES_FREED=0
+  [ -s "$WORK/images.tsv" ] || return 0
+  sort -t $'\t' -k1,1 -o "$WORK/images.sorted" "$WORK/images.tsv"
+  while IFS=$'\t' read -r id decision reason tags dangling size created in_use; do
+    [ "$decision" = remove ] || continue
+    if image_in_use "$id"; then
+      warn "not removing $id because a container now uses it"
+      say "remove_image id=$id tags=$tags reason=became-in-use size=$size action=failed"
+      continue
+    fi
+    if run_docker image rm "$id"; then
+      say "remove_image id=$id tags=$tags reason=$reason size=$size action=done"
+      printf '%s\n' "$size" >> "$WORK/freed.sizes"
+    else
+      warn "docker image rm $id failed"
+      say "remove_image id=$id tags=$tags reason=$reason size=$size action=failed"
+    fi
+  done < "$WORK/images.sorted"
+  if [ -f "$WORK/freed.sizes" ]; then
+    IMAGE_BYTES_FREED=$(awk '{s+=$1} END {print s+0}' "$WORK/freed.sizes")
+  fi
+}
+
+dir_size() {
+  local dir=$1 total=0 s
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    total=$((total + s))
+  done < <(find -P "$dir" -type f -exec stat -c '%s' {} + 2>/dev/null || true)
+  printf '%s\n' "$total"
+}
+
+verify_set() {
+  local dir=$1 log rc
+  if [ -L "$dir" ]; then
+    printf 'symlink\n'
+    return 0
+  fi
+  if [ ! -f "$dir/plaude-web.tar" ] || [ ! -f "$dir/plaude-web.tar.sha256" ]; then
+    printf 'incomplete\n'
+    return 0
+  fi
+  if [ -L "$dir/plaude-web.tar" ] || [ -L "$dir/plaude-web.tar.sha256" ]; then
+    printf 'symlink\n'
+    return 0
+  fi
+  log=$(mktemp "${TMPDIR:-/tmp}/plaude-sha.XXXXXX")
+  set +e
+  (
+    cd "$dir" || exit 97
+    "$SHA256SUM" -c plaude-web.tar.sha256
+  ) >"$log" 2>&1
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    rm -- "$log"
+    printf 'verified\n'
+    return 0
+  fi
+  if grep -E -q ': FAILED$' "$log" \
+    && ! grep -E -q 'FAILED open|Permission denied|Input/output error|No such file|Is a directory|not a regular file' "$log"; then
+    rm -- "$log"
+    printf 'mismatch\n'
+    return 0
+  fi
+  rm -- "$log"
+  printf 'unreadable\n'
+}
+
+discover_qnap() {
+  local pre_dir pre day_dir day status size mtime
+  : > "$WORK/qnap.raw"
+  for pre_dir in "$QNAP_ROOT"/*; do
+    [ -e "$pre_dir" ] || continue
+    if [ -L "$pre_dir" ]; then
+      warn "skipping symlink under qnap root: $pre_dir"
+      continue
+    fi
+    [ -d "$pre_dir" ] || continue
+    pre=$(basename "$pre_dir")
+    valid_pre_id "$pre" || continue
+    for day_dir in "$pre_dir"/*; do
+      [ -e "$day_dir" ] || continue
+      day=$(basename "$day_dir")
+      if [ -L "$day_dir" ]; then
+        printf 'symlink\t%s\t0\t0\t%s\n' "$day" "$day_dir" >> "$WORK/qnap.raw"
+        continue
+      fi
+      case "$day" in
+        *.partial)
+          [ -d "$day_dir" ] || continue
+          size=$(dir_size "$day_dir")
+          mtime=$(stat -c '%Y' "$day_dir")
+          printf 'partial\t%s\t%s\t%s\t%s\n' "$day" "$mtime" "$size" "$day_dir" >> "$WORK/qnap.raw"
+          ;;
+        *.replacing)
+          [ -d "$day_dir" ] || continue
+          size=$(dir_size "$day_dir")
+          mtime=$(stat -c '%Y' "$day_dir")
+          printf 'replacing\t%s\t%s\t%s\t%s\n' "$day" "$mtime" "$size" "$day_dir" >> "$WORK/qnap.raw"
+          ;;
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9])
+          valid_date "$day" || continue
+          [ -d "$day_dir" ] || continue
+          status=$(verify_set "$day_dir")
+          size=$(dir_size "$day_dir")
+          mtime=$(stat -c '%Y' "$day_dir")
+          printf '%s\t%s\t%s\t%s\t%s\n' "$status" "$day" "$mtime" "$size" "$day_dir" >> "$WORK/qnap.raw"
+          ;;
+      esac
+    done
+  done
+}
+
+decide_qnap() {
+  local status day mtime size path kept_bytes kept_count protected
+  : > "$WORK/qnap.plan"
+  [ -s "$WORK/qnap.raw" ] || return 0
+  protected=
+  while IFS=$'\t' read -r status day mtime size path; do
+    if [ "$status" = verified ] && [ -z "$protected" ]; then
+      protected=$path
+    fi
+  done < <(sort -t $'\t' -k2,2r -k3,3nr "$WORK/qnap.raw")
+
+  kept_bytes=0
+  kept_count=0
+  while IFS=$'\t' read -r status day mtime size path; do
+    case "$status" in
+      symlink)
+        warn "not deleting symlink qnap path: $path"
+        printf 'keep\t%s\t%s\t%s\tsymlink\n' "$size" "$status" "$path" >> "$WORK/qnap.plan"
+        ;;
+      unreadable)
+        warn "not deleting unreadable qnap set: $path"
+        printf 'keep\t%s\t%s\t%s\tunreadable\n' "$size" "$status" "$path" >> "$WORK/qnap.plan"
+        ;;
+      incomplete|mismatch|partial|replacing)
+        printf 'remove\t%s\t%s\t%s\t%s\n' "$size" "$status" "$path" "$status" >> "$WORK/qnap.plan"
+        ;;
+      verified)
+        if [ "$path" = "$protected" ]; then
+          printf 'keep\t%s\t%s\t%s\tnewest-verified\n' "$size" "$status" "$path" >> "$WORK/qnap.plan"
+          kept_bytes=$((kept_bytes + size))
+          kept_count=$((kept_count + 1))
+          continue
+        fi
+        if [ "$kept_count" -ge "$MAX_SETS" ]; then
+          printf 'remove\t%s\t%s\t%s\tover-count\n' "$size" "$status" "$path" >> "$WORK/qnap.plan"
+          continue
+        fi
+        if [ $((kept_bytes + size)) -gt "$MAX_BYTES" ]; then
+          printf 'remove\t%s\t%s\t%s\tover-bytes\n' "$size" "$status" "$path" >> "$WORK/qnap.plan"
+          continue
+        fi
+        printf 'keep\t%s\t%s\t%s\twithin-cap\n' "$size" "$status" "$path" >> "$WORK/qnap.plan"
+        kept_bytes=$((kept_bytes + size))
+        kept_count=$((kept_count + 1))
+        ;;
+      *)
+        warn "not deleting qnap path with status $status: $path"
+        printf 'keep\t%s\t%s\t%s\tunknown\n' "$size" "$status" "$path" >> "$WORK/qnap.plan"
+        ;;
+    esac
+  done < <(sort -t $'\t' -k2,2r -k3,3nr "$WORK/qnap.raw")
+}
+
+print_qnap_plan() {
+  local action size status path reason
+  [ -s "$WORK/qnap.plan" ] || return 0
+  while IFS=$'\t' read -r action size status path reason; do
+    case "$action" in
+      keep) say "qnap_keep path=$path reason=$reason size=$size" ;;
+      remove) say "qnap_remove path=$path reason=$reason size=$size action=plan" ;;
+    esac
+  done < "$WORK/qnap.plan"
+}
+
+assert_deletable_qnap_path() {
+  local dir=$1 real rel
+  [ -L "$dir" ] && die "refusing to delete symlink: $dir"
+  [ -d "$dir" ] || die "refusing to delete non-directory: $dir"
+  real=$(realpath -e "$dir")
+  case "$real/" in
+    "$QNAP_ROOT/"*) ;;
+    *) die "refusing path outside qnap root: $real" ;;
+  esac
+  rel=${real#"$QNAP_ROOT"/}
+  case "$rel" in
+    */*/*) die "refusing deep qnap path: $rel" ;;
+    */*) ;;
+    *) die "refusing shallow qnap path: $rel" ;;
+  esac
+  case "$(basename "$real")" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|*.partial|*.replacing) ;;
+    *) die "refusing unexpected qnap name: $real" ;;
+  esac
+  valid_pre_id "$(basename "$(dirname "$real")")" || die "refusing unexpected pre-id: $real"
+}
+
+apply_qnap_removals() {
+  local action size status path reason pre
+  QNAP_BYTES_FREED=0
+  [ -s "$WORK/qnap.plan" ] || return 0
+  while IFS=$'\t' read -r action size status path reason; do
+    [ "$action" = remove ] || continue
+    if [ "$path" = "${PROTECTED_QNAP:-}" ]; then
+      warn "refusing to delete protected qnap set: $path"
+      say "qnap_remove path=$path reason=protected size=$size action=failed"
+      continue
+    fi
+    assert_deletable_qnap_path "$path"
+    rm -r -- "$path"
+    say "qnap_remove path=$path reason=$reason size=$size action=done"
+    QNAP_BYTES_FREED=$((QNAP_BYTES_FREED + size))
+    pre=$(dirname "$path")
+    if [ -d "$pre" ] && [ ! -L "$pre" ] && [ -z "$(find -P "$pre" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+      rmdir -- "$pre" || warn "could not remove empty directory $pre"
+    fi
+  done < "$WORK/qnap.plan"
+}
+
+remember_protected_qnap() {
+  local action size status path reason
+  PROTECTED_QNAP=
+  [ -s "$WORK/qnap.plan" ] || return 0
+  while IFS=$'\t' read -r action size status path reason; do
+    if [ "$action" = keep ] && [ "$reason" = newest-verified ]; then
+      PROTECTED_QNAP=$path
+      return 0
+    fi
+  done < "$WORK/qnap.plan"
+}
+
+list_local_tars() {
+  local f base
+  : > "$WORK/local.raw"
+  [ -d "$LOCAL_TAR_DIR" ] || return 0
+  for f in "$LOCAL_TAR_DIR"/*.tar "$LOCAL_TAR_DIR"/*.tar.sha256 \
+    "$LOCAL_TAR_DIR"/*.tar.partial "$LOCAL_TAR_DIR"/*.sha256.partial \
+    "$LOCAL_TAR_DIR"/*.partial; do
+    [ -e "$f" ] || continue
+    base=$(basename "$f")
+    case "$base" in
+      *.tar|*.tar.sha256|*.tar.partial|*.sha256.partial|*.partial) ;;
+      *) continue ;;
+    esac
+    if [ -L "$f" ]; then
+      warn "not deleting local symlink: $f"
+      printf 'symlink\t0\t0\t%s\n' "$f" >> "$WORK/local.raw"
+      continue
+    fi
+    [ -f "$f" ] || continue
+    printf 'file\t%s\t%s\t%s\n' "$(stat -c '%Y' "$f")" "$(stat -c '%s' "$f")" "$f" >> "$WORK/local.raw"
+  done
+}
+
+decide_local_tars() {
+  # At most one local tar. Prefer the newest completed *.tar. If none is
+  # completed, keep the newest *.tar.partial so a crash during rotation does
+  # not throw away the only scratch copy. Partials go away once a completed
+  # tar exists.
+  local kind mtime size path base kept_tar kept_partial kept_sha reason
+  : > "$WORK/local.plan"
+  [ -s "$WORK/local.raw" ] || return 0
+  sort -u "$WORK/local.raw" > "$WORK/local.unique"
+  kept_tar=
+  kept_partial=
+  while IFS=$'\t' read -r kind mtime size path; do
+    [ "$kind" = file ] || continue
+    base=$(basename "$path")
+    case "$base" in
+      *.tar.partial)
+        if [ -z "$kept_partial" ]; then
+          kept_partial=$path
+        fi
+        ;;
+      *.tar.sha256|*.partial) ;;
+      *.tar)
+        if [ -z "$kept_tar" ]; then
+          kept_tar=$path
+        fi
+        ;;
+    esac
+  done < <(sort -t $'\t' -k2,2nr "$WORK/local.unique")
+  if [ -n "$kept_tar" ]; then
+    kept_partial=
+    kept_sha="${kept_tar}.sha256"
+  elif [ -n "$kept_partial" ]; then
+    kept_sha="${kept_partial%.tar.partial}.tar.sha256.partial"
+  else
+    kept_sha=
+  fi
+
+  while IFS=$'\t' read -r kind mtime size path; do
+    base=$(basename "$path")
+    if [ "$kind" = symlink ]; then
+      printf 'keep\t%s\t%s\tsymlink\n' "$size" "$path" >> "$WORK/local.plan"
+      continue
+    fi
+    if [ -n "$kept_tar" ] && [ "$path" = "$kept_tar" ]; then
+      printf 'keep\t%s\t%s\tnewest-local\n' "$size" "$path" >> "$WORK/local.plan"
+      continue
+    fi
+    if [ -n "$kept_partial" ] && [ "$path" = "$kept_partial" ]; then
+      printf 'keep\t%s\t%s\tnewest-partial\n' "$size" "$path" >> "$WORK/local.plan"
+      continue
+    fi
+    if [ -n "$kept_sha" ] && [ "$path" = "$kept_sha" ]; then
+      printf 'keep\t%s\t%s\tmatches-kept-tar\n' "$size" "$path" >> "$WORK/local.plan"
+      continue
+    fi
+    case "$base" in
+      *.tar) reason="over-count" ;;
+      *.tar.sha256) reason=checksum ;;
+      *) reason=partial ;;
+    esac
+    printf 'remove\t%s\t%s\t%s\n' "$size" "$path" "$reason" >> "$WORK/local.plan"
+  done < "$WORK/local.unique"
+}
+
+print_local_plan() {
+  local action size path reason
+  [ -s "$WORK/local.plan" ] || return 0
+  while IFS=$'\t' read -r action size path reason; do
+    case "$action" in
+      keep) say "local_tar_keep path=$path reason=$reason size=$size" ;;
+      remove) say "local_tar_remove path=$path reason=$reason size=$size action=plan" ;;
+    esac
+  done < "$WORK/local.plan"
+}
+
+assert_deletable_local_file() {
+  local file=$1 real base
+  [ -L "$file" ] && die "refusing to delete symlink: $file"
+  [ -f "$file" ] || die "refusing to delete non-file: $file"
+  real=$(realpath -e "$file")
+  base=$(basename "$real")
+  [ "$(dirname "$real")" = "$LOCAL_TAR_DIR" ] || die "refusing local path outside $LOCAL_TAR_DIR: $real"
+  case "$base" in
+    *.tar|*.tar.sha256|*.partial) ;;
+    *) die "refusing unexpected local name: $base" ;;
+  esac
+}
+
+apply_local_tar_removals() {
+  local action size path reason
+  LOCAL_BYTES_FREED=${LOCAL_BYTES_FREED:-0}
+  [ -s "$WORK/local.plan" ] || return 0
+  while IFS=$'\t' read -r action size path reason; do
+    [ "$action" = remove ] || continue
+    assert_deletable_local_file "$path"
+    rm -- "$path"
+    say "local_tar_remove path=$path reason=$reason size=$size action=done"
+    LOCAL_BYTES_FREED=$((LOCAL_BYTES_FREED + size))
+  done < "$WORK/local.plan"
+}
+
+count_tsv_field() {
+  local file=$1 column=$2 value=$3
+  [ -s "$file" ] || {
+    printf '0\n'
+    return 0
+  }
+  awk -F '\t' -v col="$column" -v want="$value" '$col==want {n++} END {print n+0}' "$file"
+}
+
+sum_plan_sizes() {
+  local file=$1 action=$2 total
+  [ -s "$file" ] || {
+    printf '0\n'
+    return 0
+  }
+  total=$(awk -F '\t' -v act="$action" '$1==act {s+=$2} END {print s+0}' "$file")
+  printf '%s\n' "$total"
+}
+
+cmd_retain() {
+  local images_keep images_skip images_remove bytes_planned qnap_keep qnap_remove
+  local qnap_bytes_planned local_keep local_remove mode
+  collect_image_ids
+  classify_images
+  discover_qnap
+  decide_qnap
+  remember_protected_qnap
+  list_local_tars
+  decide_local_tars
+
+  images_keep=$(count_tsv_field "$WORK/images.tsv" 2 keep)
+  images_skip=$(count_tsv_field "$WORK/images.tsv" 2 skip)
+  images_remove=$(count_tsv_field "$WORK/images.tsv" 2 remove)
+  bytes_planned=0
+  if [ -s "$WORK/images.tsv" ]; then
+    bytes_planned=$(awk -F '\t' '$2=="remove" {s+=$6} END {print s+0}' "$WORK/images.tsv")
+  fi
+  qnap_keep=$(count_tsv_field "$WORK/qnap.plan" 1 keep)
+  qnap_remove=$(count_tsv_field "$WORK/qnap.plan" 1 remove)
+  qnap_bytes_planned=$(sum_plan_sizes "$WORK/qnap.plan" remove)
+  local_keep=$(count_tsv_field "$WORK/local.plan" 1 keep)
+  local_remove=$(count_tsv_field "$WORK/local.plan" 1 remove)
+
+  if [ "$APPLY" -eq 1 ]; then
+    mode=apply
+  else
+    mode=dry-run
+  fi
+  say "mode=$mode"
+  say "command=retain"
+  say "policy max_sets=$MAX_SETS max_bytes=$MAX_BYTES"
+  print_image_plan
+  print_qnap_plan
+  print_local_plan
+
+  IMAGE_BYTES_FREED=0
+  QNAP_BYTES_FREED=0
+  LOCAL_BYTES_FREED=0
+  if [ "$APPLY" -eq 1 ]; then
+    apply_image_removals
+    apply_qnap_removals
+    apply_local_tar_removals
+  fi
+  say "image_bytes_planned=$bytes_planned"
+  say "image_bytes_freed=$IMAGE_BYTES_FREED"
+  say "qnap_bytes_planned=$qnap_bytes_planned"
+  say "qnap_bytes_freed=$QNAP_BYTES_FREED"
+  say "local_bytes_freed=$LOCAL_BYTES_FREED"
+  say "bytes_freed=$((IMAGE_BYTES_FREED + QNAP_BYTES_FREED + LOCAL_BYTES_FREED))"
+  say "bytes_note=image bytes are the sum of docker Size for images actually removed; layers still used by a kept image stay on disk"
+  say "summary mode=$mode command=retain images_keep=$images_keep images_skip=$images_skip images_remove=$images_remove bytes_freed=$((IMAGE_BYTES_FREED + QNAP_BYTES_FREED + LOCAL_BYTES_FREED)) qnap_keep=$qnap_keep qnap_remove=$qnap_remove local_tar_keep=$local_keep local_tar_remove=$local_remove warnings=$WARNINGS"
+  [ "$WARNINGS" -eq 0 ]
+}
+
+hash_file() {
+  local file=$1
+  "$IONICE" -c3 dd if="$file" bs="$CHUNK_BYTES" iflag=fullblock status=none \
+    | throttle_10mib \
+    | "$SHA256SUM" \
+    | awk '{print $1}'
+}
+
+copy_throttled() {
+  local src=$1 dest=$2
+  mkdir -p -- "$(dirname "$dest")"
+  "$IONICE" -c3 "$RSYNC" --bwlimit=10m --copy-links -- "$src" "$dest"
+}
+
+publish_qnap_set() {
+  local partial=$1 final=$2 replacing=$3
+  if [ -e "$final" ]; then
+    [ -L "$final" ] && die "refusing to replace symlink: $final"
+    [ -d "$final" ] || die "qnap destination is not a directory: $final"
+    if [ -e "$replacing" ]; then
+      die "leftover $replacing exists; run retain --apply before replacing this set"
+    fi
+    mv -- "$final" "$replacing"
+  fi
+  if ! mv -- "$partial" "$final"; then
+    if [ -d "$replacing" ] && [ ! -e "$final" ]; then
+      mv -- "$replacing" "$final" || warn "could not restore $final after a failed publish"
+    fi
+    die "could not move verified backup into $final"
+  fi
+  if [ -d "$replacing" ] && [ ! -L "$replacing" ]; then
+    assert_deletable_qnap_path "$replacing"
+    rm -r -- "$replacing"
+  fi
+}
+
+cmd_backup() {
+  local id created size tags dir tag parsed pre_id date newest_line mode
+  local tar_partial sha_partial tar_final sha_final hash bytes
+  local partial final replacing dockerfile
+  collect_image_ids
+  classify_images
+  if [ ! -s "$WORK/newest-pre" ]; then
+    die "no plaude-web:pre-<id>-<YYYYMMDD> tag to back up"
+  fi
+  newest_line=$(cat "$WORK/newest-pre")
+  IFS=$'\t' read -r date created tag id <<<"$newest_line"
+  parsed=$(parse_pre_tag "$tag") || die "newest pre tag is not pre-<id>-<YYYYMMDD>: $tag"
+  pre_id=${parsed%% *}
+  date=${parsed#* }
+  dockerfile="$PLAUDE_ROOT/Dockerfile"
+  [ -f "$dockerfile" ] || die "Dockerfile not found: $dockerfile"
+  [ -L "$dockerfile" ] && [ ! -f "$dockerfile" ] && die "Dockerfile is not a file: $dockerfile"
+
+  if [ "$APPLY" -eq 1 ]; then
+    mode=apply
+  else
+    mode=dry-run
+  fi
+  partial="$QNAP_ROOT/$pre_id/${date}.partial"
+  final="$QNAP_ROOT/$pre_id/$date"
+  replacing="$QNAP_ROOT/$pre_id/${date}.replacing"
+  say "mode=$mode"
+  say "command=backup"
+  say "backup_tag=$tag"
+  say "backup_image=$id"
+  say "backup_pre_id=$pre_id"
+  say "backup_date=$date"
+  say "backup_dest=$final"
+  say "dockerfile=$dockerfile"
+
+  list_local_tars
+  decide_local_tars
+  print_local_plan
+
+  if [ "$APPLY" -ne 1 ]; then
+    say "qnap_publish path=$final action=plan"
+    say "bytes_freed=0"
+    say "summary mode=dry-run command=backup backup_tag=$tag warnings=$WARNINGS"
+    [ "$WARNINGS" -eq 0 ]
+    return
+  fi
+
+  if [ -s "$WORK/local.plan" ] && grep -q $'\tsymlink$' "$WORK/local.plan"; then
+    die "local tar dir contains a symlink; remove it by hand before --apply"
+  fi
+  apply_local_tar_removals
+
+  tar_partial="$LOCAL_TAR_DIR/plaude-web.tar.partial"
+  sha_partial="$LOCAL_TAR_DIR/plaude-web.tar.sha256.partial"
+  tar_final="$LOCAL_TAR_DIR/plaude-web.tar"
+  sha_final="$LOCAL_TAR_DIR/plaude-web.tar.sha256"
+  if [ -L "$tar_partial" ] || [ -L "$sha_partial" ]; then
+    die "refusing to write through a symlink in $LOCAL_TAR_DIR"
+  fi
+  if [ -e "$tar_partial" ] && [ ! -f "$tar_partial" ]; then
+    die "refusing to replace non-file $tar_partial"
+  fi
+  case "$tag" in
+    -*) die "refusing docker save target: $tag" ;;
+  esac
+  reject_docker_arg "$tag"
+
+  if ! "$IONICE" -c3 "$DOCKER" save "$tag" | throttle_10mib > "$tar_partial"; then
+    if [ -f "$tar_partial" ]; then
+      rm -- "$tar_partial"
+    fi
+    die "docker save failed for $tag"
+  fi
+  bytes=$(stat -c '%s' "$tar_partial")
+  if [ "$bytes" -lt "$MIN_TAR_BYTES" ]; then
+    rm -- "$tar_partial"
+    die "docker save wrote only $bytes bytes for $tag"
+  fi
+  hash=$(hash_file "$tar_partial") || die "sha256 of local tar failed"
+  case "$hash" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+    *) die "unexpected sha256: ${hash:-empty}" ;;
+  esac
+  printf '%s  %s\n' "$hash" "plaude-web.tar" > "$sha_partial"
+
+  # The hashed partial is durable enough to drop older completed tars.
+  # *.tar does not match the partial, so this leaves one scratch file, then
+  # the rename makes it the single completed tar.
+  drop_other_local_tars "$tar_partial" "$sha_partial"
+  mv -- "$tar_partial" "$tar_final"
+  mv -- "$sha_partial" "$sha_final"
+  say "local_tar_keep path=$tar_final reason=in-progress size=$bytes"
+
+  if [ -d "$partial" ] && [ ! -L "$partial" ]; then
+    assert_deletable_qnap_path "$partial"
+    rm -r -- "$partial"
+  fi
+  mkdir -p -- "$partial/source"
+  copy_throttled "$tar_final" "$partial/plaude-web.tar"
+  copy_throttled "$sha_final" "$partial/plaude-web.tar.sha256"
+  copy_throttled "$dockerfile" "$partial/source/Dockerfile"
+
+  if ! (
+    cd "$partial" || exit 1
+    "$SHA256SUM" -c plaude-web.tar.sha256
+  ) >"$WORK/qnap-verify.txt" 2>&1; then
+    cat "$WORK/qnap-verify.txt" >&2
+    warn "QNAP sha256 verification failed; local tar kept at $tar_final; partial left at $partial"
+    say "qnap_publish path=$final action=failed"
+    say "local_tar_remaining=$(count_local_tars)"
+    say "bytes_freed=0"
+    say "summary mode=apply command=backup backup_tag=$tag warnings=$WARNINGS"
+    exit 1
+  fi
+
+  publish_qnap_set "$partial" "$final" "$replacing"
+  assert_deletable_local_file "$tar_final"
+  assert_deletable_local_file "$sha_final"
+  rm -- "$tar_final"
+  rm -- "$sha_final"
+  say "qnap_publish path=$final action=done size=$bytes sha256=$hash"
+  say "local_tar_remove path=$tar_final reason=verified-and-copied size=$bytes action=done"
+  say "local_tar_remaining=$(count_local_tars)"
+  say "bytes_freed=0"
+  say "summary mode=apply command=backup backup_tag=$tag warnings=$WARNINGS"
+  [ "$WARNINGS" -eq 0 ]
+}
+
+count_local_tars() {
+  local f n=0
+  [ -d "$LOCAL_TAR_DIR" ] || {
+    printf '0\n'
+    return 0
+  }
+  for f in "$LOCAL_TAR_DIR"/*.tar; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    n=$((n + 1))
+  done
+  printf '%s\n' "$n"
+}
+
+# Delete completed local tars and checksums, leaving the scratch files named
+# in the arguments (the hashed partials) in place.
+drop_other_local_tars() {
+  local keep1=$1 keep2=$2 f size
+  for f in "$LOCAL_TAR_DIR"/*.tar "$LOCAL_TAR_DIR"/*.tar.sha256; do
+    [ -e "$f" ] || continue
+    [ "$f" = "$keep1" ] && continue
+    [ "$f" = "$keep2" ] && continue
+    [ -L "$f" ] && die "refusing to delete symlink $f"
+    assert_deletable_local_file "$f"
+    size=$(stat -c '%s' "$f")
+    rm -- "$f"
+    say "local_tar_remove path=$f reason=replaced-by-new-tar size=$size action=done"
+  done
+}
+
+parse_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      --dry-run)
+        SAW_DRY=1
+        APPLY=0
+        shift
+        ;;
+      --apply)
+        SAW_APPLY=1
+        APPLY=1
+        shift
+        ;;
+      --qnap-root)
+        [ "$#" -ge 2 ] || die "--qnap-root needs a path"
+        QNAP_ROOT=$2
+        shift 2
+        ;;
+      --local-tar-dir)
+        [ "$#" -ge 2 ] || die "--local-tar-dir needs a path"
+        LOCAL_TAR_DIR=$2
+        shift 2
+        ;;
+      --plaude-root)
+        [ "$#" -ge 2 ] || die "--plaude-root needs a path"
+        PLAUDE_ROOT=$2
+        shift 2
+        ;;
+      --max-sets)
+        [ "$#" -ge 2 ] || die "--max-sets needs an integer"
+        MAX_SETS=$2
+        shift 2
+        ;;
+      --max-bytes)
+        [ "$#" -ge 2 ] || die "--max-bytes needs an integer"
+        MAX_BYTES=$2
+        shift 2
+        ;;
+      retain|backup)
+        COMMAND=$1
+        shift
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+  if [ "$SAW_DRY" -eq 1 ] && [ "$SAW_APPLY" -eq 1 ]; then
+    die "pass only one of --dry-run and --apply"
+  fi
+  need_int max_sets "$MAX_SETS" 1
+  need_int max_bytes "$MAX_BYTES" 1
+}
+
+main() {
+  parse_args "$@"
+  WORK=$(mktemp -d "${TMPDIR:-/tmp}/plaude-image-retention.XXXXXX")
+  ensure_qnap
+  ensure_local_dir_safe
+  if [ "$APPLY" -eq 1 ]; then
+    acquire_lock
+  fi
+  case "$COMMAND" in
+    retain) cmd_retain ;;
+    backup) cmd_backup ;;
+    *) die "unknown command: $COMMAND" ;;
+  esac
+}
+
+main "$@"
